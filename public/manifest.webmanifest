@@ -1,0 +1,13 @@
+{
+  "name": "VANTAGGIO — Il calcio, letto meglio",
+  "short_name": "VANTAGGIO",
+  "description": "Live score, notizie, classifiche e analisi calcistiche.",
+  "start_url": "/#dashboard",
+  "display": "standalone",
+  "background_color": "#08100d",
+  "theme_color": "#08100d",
+  "lang": "it",
+  "icons": [
+    { "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}
