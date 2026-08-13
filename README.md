@@ -60,7 +60,7 @@ Le fonti possono essere parziali o cambiare formato. Il backend normalizza i dat
 - `/api/intelligence`: calendario, tattica, copione, giocatori e news, cache separata 10 minuti;
 - snapshot tecnici recenti: massimo tre eventi per squadra, cache 30 minuti;
 - endpoint leggeri per partite, classifiche, notizie e stato servizio;
-- asset statici con versionamento cache `3.0.0`.
+- asset statici con versionamento cache `3.0.1`; cambio data automatico a mezzanotte nel fuso Europe/Rome.
 
 ## Pubblicazione con URL stabile
 

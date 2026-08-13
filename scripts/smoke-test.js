@@ -10,7 +10,7 @@ async function get(path, type = 'json') {
 
 (async () => {
   const html = await get('/', 'text');
-  if (!html.includes('VANTAGGIO') || !html.includes('/app.js?v=3.0.0') || !html.includes('/styles.css?v=3.0.0')) throw new Error('Homepage o asset V3 non validi');
+  if (!html.includes('VANTAGGIO') || !html.includes('/app.js?v=3.0.1') || !html.includes('/styles.css?v=3.0.1')) throw new Error('Homepage o asset V3 non validi');
 
   const status = await get('/api/status');
   if (!status.ok || status.timezone !== 'Europe/Rome' || status.leagues.length < 5) throw new Error('Status API non valido');

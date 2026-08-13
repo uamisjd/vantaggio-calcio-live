@@ -203,6 +203,20 @@ async function refreshAll(manual = false) {
   state.refreshing = true;
   $('#refreshButton')?.classList.add('spinning');
   updateSyncStatus(true);
+  const romeToday = localDateKey(new Date());
+  if (romeToday !== state.today) {
+    try {
+      const status = await api('/api/status');
+      state.today = status.today || romeToday;
+      state.leagues = status.leagues || state.leagues;
+    } catch {
+      state.today = romeToday;
+    }
+    state.selectedDate = 'all';
+    state.analyses = {};
+    state.intelligence = {};
+    state.powerPicks = [];
+  }
   const suffix = manual ? '&fresh=1' : '';
   const from = addDays(state.today, -1);
   const to = addDays(state.today, 13);
