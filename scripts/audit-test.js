@@ -26,18 +26,23 @@ function noInvalidNumbers(value) {
 (async () => {
   const home = await request('/', 'text');
   check(home.response.status === 200, 'Homepage HTTP 200');
-  check(home.body.includes('V4.6') && home.body.includes('app.js?v=4.6.0'), 'Homepage V4.6.0 e cache key corrette');
+  check(home.body.includes('V4.7') && home.body.includes('app.js?v=4.7.0'), 'Homepage V4.7.0 e cache key corrette');
   check(home.response.headers.get('x-content-type-options') === 'nosniff', 'Header nosniff presente');
   check(home.response.headers.get('referrer-policy') === 'strict-origin-when-cross-origin', 'Referrer policy sicura presente');
 
   const [manifest, favicon, app, css, status] = await Promise.all([
-    request('/manifest.webmanifest'), request('/favicon.svg', 'text'), request('/app.js?v=4.6.0', 'text'),
-    request('/styles.css?v=4.6.0', 'text'), request('/api/status')
+    request('/manifest.webmanifest'), request('/favicon.svg', 'text'), request('/app.js?v=4.7.0', 'text'),
+    request('/styles.css?v=4.7.0', 'text'), request('/api/status')
   ]);
   check(manifest.response.status === 200 && manifest.body?.start_url === '/#dashboard' && manifest.body?.display === 'standalone', 'Manifest PWA valido');
   check(favicon.response.status === 200 && favicon.body.includes('<svg'), 'Favicon SVG valida');
   check(app.response.status === 200 && app.body.includes('renderFallbackDeepAnalysis'), 'Bundle frontend completo');
   check(app.body.includes('MATCH CONTROL ROOM') && app.body.includes('MATCH READINESS GATE') && app.body.includes('EVIDENCE MAP'), 'Control Room, Readiness Gate ed Evidence Map presenti');
+  check(app.body.includes('PRE-MATCH TOTAL INTELLIGENCE') && app.body.includes('prematchTotalIntelligence') && app.body.includes('data-prematch-jump'), 'Manifesto Pre-Match Total Intelligence presente');
+  check(app.body.includes('contextDateConflict') && app.body.includes('Metadato contraddittorio'), 'Contraddizioni fra fase e data dichiarate');
+  check(app.body.includes('PRE-MATCH WINDOW') && app.body.includes('DOSSIER PRE-MATCH') && !app.body.includes('LIVE PULSE') && !app.body.includes('LIVE CONTROL'), 'Dashboard e calendario centrati sul prematch');
+  check(!app.body.includes('function notifyLive') && !app.body.includes("addChange('live'") && app.body.includes('Analisi live disattivata'), 'Live limitato allo score senza segnali o notifiche');
+  check(app.body.includes('minutes > 0 && minutes <= 65') && app.body.includes('Finestra pre-match chiusa'), 'Nessun ricontrollo dossier dopo il kickoff programmato');
   check(app.body.includes('SIGNAL LIFECYCLE') && app.body.includes('captureSignalLifecycle') && app.body.includes("'T-60', 'T-30', 'T-10'"), 'Signal Lifecycle e checkpoint pre-kickoff presenti');
   check(app.body.includes('vantaggio:signalLifecycle:v1') && app.body.includes("match.state !== 'pre'") && app.body.includes('now.getTime() >= kickoffMs'), 'Signal Lifecycle locale e protezione post-hoc presenti');
   check(['summary', 'teams', 'numbers', 'verify'].every(tab => app.body.includes(`id: '${tab}'`)), 'Quattro aree del dossier presenti');
@@ -46,6 +51,7 @@ function noInvalidNumbers(value) {
   check(css.response.status === 200 && css.body.includes('@media (max-width: 720px)'), 'CSS responsive servito');
   check(css.body.includes('.match-room-tabs') && css.body.includes('.readiness-gate') && css.body.includes('.evidence-map'), 'Design system Control Room servito');
   check(css.body.includes('.signal-lifecycle') && css.body.includes('.lifecycle-card'), 'Timeline Signal Lifecycle responsive servita');
+  check(css.body.includes('.prematch-total-intelligence') && css.body.includes('.prematch-manifest') && css.body.includes('.score-only-live'), 'Design system Pre-Match Total Intelligence servito');
   check(app.response.headers.get('cache-control')?.includes('immutable') && css.response.headers.get('cache-control')?.includes('immutable'), 'Asset versionati serviti con cache immutabile');
   check(status.response.status === 200 && status.body?.ok && status.body.timezone === 'Europe/Rome', 'Status API e timezone validi');
   check(Array.isArray(status.body?.standingsLeagues) && status.body.standingsLeagues.length >= 12, 'Catalogo classifiche estese valido');
@@ -64,8 +70,8 @@ function noInvalidNumbers(value) {
   check(matches.every(match => match.home?.name && match.away?.name && match.league?.id && Number.isFinite(match.opportunity) && match.opportunity >= 0 && match.opportunity <= 100), 'Squadre, competizioni e indici validi');
   check(noInvalidNumbers(matchesResult.body), 'Nessun numero JSON non finito nelle partite');
 
-  const byLeague = [...new Map(matches.map(match => [match.league.id, match])).values()];
-  const upcoming = byLeague.filter(match => match.state !== 'post').slice(0, 5);
+  const byLeague = [...new Map(matches.filter(match => match.state === 'pre' && new Date(match.date).getTime() > Date.now()).map(match => [match.league.id, match])).values()];
+  const upcoming = byLeague.slice(0, 5);
   check(upcoming.length >= 3, 'Campione multi-competizione analizzabile');
   const dossiers = await Promise.all(upcoming.map(async match => {
     const [power, intel] = await Promise.all([

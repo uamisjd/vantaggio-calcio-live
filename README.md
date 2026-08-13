@@ -1,17 +1,26 @@
-# VANTAGGIO 4.6.0 — Signal Lifecycle
+# VANTAGGIO 4.7.0 — Pre-Match Total Intelligence
 
-Portale calcistico responsive in italiano che unisce calendario globale, live score, probabilità e **Match Intelligence** in un’identità ibrida esclusiva: regia broadcast, data room e magazine editoriale. Funziona senza API a pagamento, senza account utente e senza dipendenze npm.
+Portale calcistico responsive in italiano che unisce calendario globale, score essenziale, probabilità e **Pre-Match Total Intelligence** in un’identità ibrida esclusiva: regia broadcast, data room e magazine editoriale. Funziona senza API a pagamento, senza account utente e senza dipendenze npm.
 
 ## Esperienza V4 per ogni sezione
 
-- **Dashboard / Daily Briefing**: pulse live, agenda delle 48 ore, segnale Intelligence e copertura, senza ticker o anteprime duplicate.
-- **Partite / Matchday Command**: ora ufficiale Europe/Rome, live control, prossimo kickoff, densità del programma e calendario a giornate.
+- **Dashboard / Daily Briefing**: finestra prematch, agenda delle 48 ore, segnale Intelligence e copertura, senza ticker o anteprime duplicate.
+- **Partite / Pre-Match Command**: ora ufficiale Europe/Rome, dossier da preparare, prossimo kickoff, densità del programma e calendario a giornate; per le gare iniziate restano solo score, minuto e stato.
 - **Radar / Signal Studio**: podio delle priorità e tavolo completo di selezione, senza un secondo registro dei segnali ridondante.
 - **News / VANTAGGIO Newsroom**: apertura editoriale, titoli secondari, classificazione tematica, data ed editore visibili.
 - **Classifiche / Table Lab**: capolista, distacco, miglior attacco/difesa, ritmo gol, PPG e lettura della corsa.
 - **Preferiti / My Matchroom**: countdown, prossimo evento, dossier consultati, alert e privacy locale.
 - **Scout Search**: ricerca trasversale di partite, squadre, competizioni e notizie con navigazione da tastiera.
 - **Match dossier / Control Room**: un’unica architettura adattiva raggruppa Sintesi, Squadre, Numeri e Verifiche; il Power Model vive soltanto nell’area Numeri.
+
+## Pre-Match Total Intelligence V4.7
+
+- **Live ridotto all’essenziale**: un incontro in corso conserva nel calendario soltanto squadre, punteggio, minuto e stato. L’apertura mostra un pannello score-only e non chiama Power Model o Match Intelligence; se il provider tarda a cambiare stato, la finestra si chiude comunque all’orario di kickoff.
+- **Nessun segnale durante la gara**: rimossi notifiche di inizio, aggiornamenti di punteggio nel What Changed Desk, dashboard Live Pulse, Live Control e qualunque dossier o consiglio live.
+- **Manifesto di copertura in Sintesi**: sei righe mostrano stato completo, parziale o non disponibile per contesto; forma e calendario; matchup tattico; rosa e formazioni; modello e mercato; fonti, news e punti oscuri.
+- **Navigazione guidata**: ogni riga porta direttamente a Sintesi, Squadre, Numeri o Verifiche. Il dettaglio resta completo senza moltiplicare schede o livelli di navigazione.
+- **Vuoti e contraddizioni espliciti**: feed mancanti, campioni ridotti, mercato assente e metadati stagionali incompatibili con la data dell’evento vengono dichiarati; nessun dato viene inventato per far apparire il dossier completo.
+- **Prematch come unica priorità operativa**: Dashboard, badge e calendario contano esclusivamente eventi futuri realmente in stato pre-kickoff.
 
 ## Signal Lifecycle V4.6
 
@@ -27,7 +36,7 @@ Portale calcistico responsive in italiano che unisce calendario globale, live sc
 - **Quattro aree, nessun contenuto sparso**: Sintesi per la decisione, Squadre per tattica/calendario/lineup/availability, Numeri per Power Model e dati del torneo, Verifiche per fonti, What Changed, vuoti informativi e Reliability Ledger.
 - **Match Readiness Gate**: prima di qualsiasi segnale controlla formazioni, disponibilità, affidabilità complessiva, campione tecnico e freschezza. Può indicare Pronta, Cautela o Attendi senza trasformarsi in promessa di risultato.
 - **Evidence Map**: separa e conta fatti verificati, letture derivate, punti da verificare e segnalazioni superate dalle lineup ufficiali.
-- **Dossier adattivo**: pre-partita mostra il brief decisionale; durante il live sospende il modello e privilegia score e dati effettivi; dopo il finale chiude ogni consiglio e apre la review. Anche Radar e Power Picks selezionano soltanto eventi realmente pre-kickoff.
+- **Dossier adattivo**: pre-partita mostra il brief decisionale completo; a gara iniziata il dossier non viene caricato e resta soltanto lo score essenziale; dopo il finale chiude ogni consiglio e apre la review. Anche Radar e Power Picks selezionano soltanto eventi realmente pre-kickoff.
 - **Progressive disclosure controllata**: un solo livello di tab principali e un secondo livello esclusivamente nell’area Verifiche. Su Android la navigazione rimane sticky e scorrevole.
 - **Accessibilità**: tab con ruoli e stati ARIA, focus visibile, attivazione standard e navigazione con frecce, Home ed End.
 - La Sintesi pre-partita è stata ridotta da oltre 21.000 a circa 6.000 caratteri di markup nel test reale, senza eliminare i dettagli: sono stati ricollocati nell’area corretta.
@@ -39,9 +48,9 @@ Portale calcistico responsive in italiano che unisce calendario globale, live sc
 - **Availability Intelligence**: combina formazioni ufficiali dell'evento, injury feed espliciti, dataset ufficiale Fantasy Premier League per la sola Premier League e rassegna datata su infortuni, squalifiche, fitness e lineup.
 - **Gerarchia delle prove**: lineup e comunicati ufficiali → dataset ufficiali/provider espliciti → reporting forte → segnali da verificare. Sono visibili tier, timestamp, fonte, stato del giocatore e riscontri fra editori; un riscontro editoriale non diventa automaticamente conferma medica.
 - **Unknown by design**: feed vuoti, assenza di titoli e silenzio delle fonti non vengono mai tradotti in “rosa al completo”. Le formazioni ufficiali prevalgono su segnalazioni precedenti incompatibili.
-- **What Changed per partita**: ogni dossier contiene la propria cronologia locale di orario, sede, stato, punteggio, lineup e nuovi segnali, oltre al desk aggregato in dashboard.
+- **What Changed per partita**: ogni dossier contiene la propria cronologia locale pre-kickoff di orario, sede, lineup, disponibilità e nuovi segnali, oltre alla riconciliazione finale. Non produce aggiornamenti durante la gara.
 - **Table Lab esteso**: il catalogo classifiche è separato da quello del calendario e comprende 16 competizioni verificate sul feed, senza appesantire le richieste dello scoreboard globale.
-- L'estensione **offline PWA** non è stata implementata, come richiesto: aggiornamenti e fonti live richiedono connessione.
+- L'estensione **offline PWA** non è stata implementata, come richiesto: calendario e fonti aggiornate richiedono connessione.
 
 ## Dossier Cleanup V4.3
 
@@ -63,7 +72,7 @@ Portale calcistico responsive in italiano che unisce calendario globale, live sc
 
 ## Specialità V4.1
 
-- **What Changed Desk**: crea una baseline locale e segnala nuovi eventi, variazioni di orario o sede, inizio/fine, punteggi, lineup e nuovi segnali pre-partita. Il registro resta sul dispositivo.
+- **What Changed Desk**: crea una baseline locale e segnala nuovi eventi, variazioni di orario o sede, lineup, disponibilità e nuovi segnali pre-partita; al termine può registrare il risultato finale. Il registro resta sul dispositivo.
 - **Kickoff Watch**: per le partite salvate esegue un ricontrollo mirato a 60, 30 e 10 minuti dal calcio d’inizio, senza polling costoso continuo; può notificare quando il browser è aperto.
 - **Team DNA**: dossier squadra richiamabile dal match, dalla ricerca o dalla classifica, con risultati, split casa/trasferta, fingerprint tecnico, fatti, letture e limiti del campione.
 - **Data Reliability Ledger**: valuta separatamente contesto, calendario, boxscore tecnici, formazioni, news e disponibilità. Misura la qualità informativa, non la certezza di un pronostico.
@@ -81,7 +90,7 @@ Portale calcistico responsive in italiano che unisce calendario globale, live sc
 
 ## Match Intelligence
 
-Ogni partita apre due livelli distinti. Match Intelligence è sempre il primo; se la copertura completa non è raggiungibile, il frontend mantiene un dossier ridotto e chiaramente etichettato.
+Ogni partita futura apre due livelli distinti. Match Intelligence è sempre il primo; se la copertura completa non è raggiungibile, il frontend mantiene un dossier ridotto e chiaramente etichettato. Le partite in corso non aprono questi livelli.
 
 ### Power Model 2.1
 
@@ -106,7 +115,7 @@ Ogni partita apre due livelli distinti. Match Intelligence è sempre il primo; s
 - Red Flags su campione ridotto, rotazioni, nuova stagione, calendario e dati mancanti;
 - separazione visiva fra **Fatto**, **Lettura** e **Da verificare**.
 
-La Intelligence Room viene caricata solo quando si apre una partita. La lettura editoriale viene mostrata prima; le evidenze di supporto sono raccolte in cassetti consultabili. Le chiamate più costose sono limitate e memorizzate in cache.
+La Intelligence Room viene caricata solo quando si apre una partita futura. La lettura editoriale viene mostrata prima; le evidenze di supporto sono raccolte nelle quattro aree della Control Room. Le chiamate più costose sono limitate e memorizzate in cache.
 
 ## Altre funzioni
 
@@ -114,7 +123,7 @@ La Intelligence Room viene caricata solo quando si apre una partita. La lettura 
 - scoperta globale delle partite, non limitata ai cinque principali campionati;
 - filtri dinamici per data e competizione;
 - aggiornamento automatico ogni 90 secondi;
-- live score e stato degli incontri;
+- score, minuto e stato essenziale degli incontri in corso, senza analisi live;
 - Match Radar con indice trasparente 0–100;
 - Power Picks ordinati per segnale, rischio e qualità;
 - notizie aggregate con link alla fonte originale;
@@ -143,7 +152,7 @@ Le fonti possono essere parziali o cambiare formato. Il backend normalizza i dat
 - disponibilità FPL cache 30 minuti, injury feed 20 minuti, rassegna availability 15 minuti;
 - snapshot tecnici recenti: massimo tre eventi per squadra, cache 30 minuti;
 - endpoint leggeri per partite, classifiche, notizie e stato servizio;
-- asset statici con versionamento cache `4.6.0`; cambio data automatico a mezzanotte nel fuso Europe/Rome.
+- asset statici con versionamento cache `4.7.0`; cambio data automatico a mezzanotte nel fuso Europe/Rome.
 
 ## Pubblicazione con URL stabile
 
@@ -167,7 +176,7 @@ npm test
 npm run audit
 ```
 
-I test verificano homepage e asset V4.6.0, tutte le viste frontend, Match Control Room, Readiness Gate, Evidence Map, Signal Lifecycle, checkpoint T-60/T-30/T-10, delta, riconciliazione e blocco post-hoc, navigazione ARIA, adattamento pre/live/post, sospensione del modello durante il live, fallback trasparente, Model Track Record, Source Health Center, Availability Intelligence, Deep Match Review, 16 classifiche, Reliability Ledger e Team DNA. L'audit esteso contiene 115 controlli.
+I test verificano homepage e asset V4.7.0, tutte le viste frontend, Match Control Room, Pre-Match Total Intelligence, Readiness Gate, Evidence Map, Signal Lifecycle, checkpoint T-60/T-30/T-10, delta, riconciliazione e blocco post-hoc, navigazione ARIA, policy score-only per le gare in corso, assenza di notifiche e segnali live, fallback trasparente, Model Track Record, Source Health Center, Availability Intelligence, Deep Match Review, 16 classifiche, Reliability Ledger e Team DNA. L’audit esteso conta dinamicamente tutti i controlli eseguiti.
 
 ## Struttura
 

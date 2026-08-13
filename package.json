@@ -1,8 +1,8 @@
 {
   "name": "vantaggio-calcio",
-  "version": "4.6.0",
+  "version": "4.7.0",
   "private": true,
-  "description": "Dashboard calcio live, news, classifiche e analisi responsabili senza API a pagamento.",
+  "description": "Pre-Match Total Intelligence, score essenziale, news e classifiche senza API a pagamento.",
   "scripts": {
     "start": "node server.js",
     "dev": "node server.js",

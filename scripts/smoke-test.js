@@ -10,21 +10,23 @@ async function get(path, type = 'json') {
 
 (async () => {
   const html = await get('/', 'text');
-  if (!html.includes('VANTAGGIO') || !html.includes('V4.6') || !html.includes('/app.js?v=4.6.0') || !html.includes('/styles.css?v=4.6.0')) throw new Error('Homepage o asset V4.6.0 non validi');
-  const [appJs, styles] = await Promise.all([get('/app.js?v=4.6.0', 'text'), get('/styles.css?v=4.6.0', 'text')]);
-  const v4Modules = ['DAILY BRIEFING', 'MATCHDAY COMMAND', 'SIGNAL STUDIO', 'VANTAGGIO NEWSROOM', 'TABLE LAB', 'MY MATCHROOM', 'SCOUT SEARCH', 'WHAT CHANGED DESK', 'KICKOFF WATCH', 'TEAM DNA', 'RELIABILITY LEDGER', 'MATCH ARCHIVE', 'MODEL TRACK RECORD', 'SOURCE HEALTH CENTER', 'AVAILABILITY INTELLIGENCE'];
-  const dossierFirst = ['MATCH CONTROL ROOM', 'renderFallbackDeepAnalysis', 'readinessGate', 'EVIDENCE MAP', 'SIGNAL LIFECYCLE', 'captureSignalLifecycle', 'COPERTURA RIDOTTA'];
-  if (!v4Modules.every(module => appJs.includes(module)) || !dossierFirst.every(module => appJs.includes(module)) || !styles.includes('VANTAGGIO 4.0') || !styles.includes('.deep-dive.fallback')) throw new Error('Moduli esperienza V4.5 incompleti');
+  if (!html.includes('VANTAGGIO') || !html.includes('V4.7') || !html.includes('/app.js?v=4.7.0') || !html.includes('/styles.css?v=4.7.0')) throw new Error('Homepage o asset V4.7.0 non validi');
+  const [appJs, styles] = await Promise.all([get('/app.js?v=4.7.0', 'text'), get('/styles.css?v=4.7.0', 'text')]);
+  const v4Modules = ['DAILY BRIEFING', 'PRE-MATCH COMMAND', 'SIGNAL STUDIO', 'VANTAGGIO NEWSROOM', 'TABLE LAB', 'MY MATCHROOM', 'SCOUT SEARCH', 'WHAT CHANGED DESK', 'KICKOFF WATCH', 'TEAM DNA', 'RELIABILITY LEDGER', 'MATCH ARCHIVE', 'MODEL TRACK RECORD', 'SOURCE HEALTH CENTER', 'AVAILABILITY INTELLIGENCE'];
+  const dossierFirst = ['MATCH CONTROL ROOM', 'PRE-MATCH TOTAL INTELLIGENCE', 'prematchTotalIntelligence', 'renderFallbackDeepAnalysis', 'readinessGate', 'EVIDENCE MAP', 'SIGNAL LIFECYCLE', 'captureSignalLifecycle', 'COPERTURA RIDOTTA'];
+  if (!v4Modules.every(module => appJs.includes(module)) || !dossierFirst.every(module => appJs.includes(module)) || !styles.includes('V4.7 · Pre-Match Total Intelligence') || !styles.includes('.prematch-total-intelligence') || !styles.includes('.deep-dive.fallback')) throw new Error('Moduli esperienza V4.5 incompleti');
   if (appJs.includes('class="broadcast-strip"') || appJs.includes('function newsroomPreview') || appJs.includes('SIGNAL LEDGER') || styles.includes('.broadcast-strip') || styles.includes('.signal-ledger')) throw new Error('Componenti ridondanti ancora attivi');
   const modalSource = appJs.slice(appJs.indexOf('function openMatch'), appJs.indexOf('function renderFallbackDeepAnalysis'));
   const summarySource = appJs.slice(appJs.indexOf('function matchRoomSummary'), appJs.indexOf('function matchRoomTeams'));
   const intelligenceSource = appJs.slice(appJs.indexOf('function renderIntelligence'), appJs.indexOf('function openInfo'));
   if (!modalSource.includes('id="matchIntelligence"') || modalSource.includes('model-drawer') || !modalSource.includes('loadIntelligence(match).then(() => loadAnalysis(match))')) throw new Error('Control Room o caricamento dossier non validi');
   const readinessIndex = summarySource.indexOf('readinessGate(data)');
-  const lifecycleIndex = summarySource.indexOf('signalLifecycleMarkup(data)');
   const briefIndex = summarySource.indexOf('executiveBriefMarkup(data)');
-  const evidenceIndex = summarySource.indexOf('evidenceMapMarkup(data)');
-  if (readinessIndex < 0 || lifecycleIndex < readinessIndex || briefIndex < lifecycleIndex || evidenceIndex < briefIndex || !['summary', 'teams', 'numbers', 'verify'].every(tab => intelligenceSource.includes(`id: '${tab}'`))) throw new Error('Gerarchia Match Control Room non valida');
+  const totalIndex = summarySource.indexOf('prematchTotalIntelligence(data)');
+  const lifecycleIndex = summarySource.indexOf('signalLifecycleMarkup(data)');
+  if (readinessIndex < 0 || briefIndex < readinessIndex || totalIndex < briefIndex || lifecycleIndex < totalIndex || !['summary', 'teams', 'numbers', 'verify'].every(tab => intelligenceSource.includes(`id: '${tab}'`))) throw new Error('Gerarchia Match Control Room non valida');
+  const scoreOnlyIndex = modalSource.indexOf("if (match.state === 'in' || preWindowClosed)");
+  if (scoreOnlyIndex < 0 || scoreOnlyIndex > modalSource.indexOf('loadIntelligence(match)') || appJs.includes('function notifyLive') || appJs.includes("addChange('live'")) throw new Error('Politica score-only per le partite in corso non valida');
 
   const status = await get('/api/status');
   if (!status.ok || status.timezone !== 'Europe/Rome' || status.leagues.length < 5 || !Array.isArray(status.standingsLeagues) || status.standingsLeagues.length < 12) throw new Error('Status API non valido');
@@ -42,7 +44,7 @@ async function get(path, type = 'json') {
   const expandedStandings = await get('/api/standings?league=por.1');
   if (!expandedStandings.ok || expandedStandings.data.league?.id !== 'por.1' || expandedStandings.data.table.length < 16) throw new Error('Classifiche estese non valide');
 
-  const analyzable = matches.data.matches.find(item => item.state !== 'post');
+  const analyzable = matches.data.matches.find(item => item.state === 'pre' && new Date(item.date).getTime() > Date.now());
   if (!analyzable) throw new Error('Nessuna partita analizzabile');
   const analysis = await get(`/api/analysis?event=${encodeURIComponent(analyzable.id)}&league=${encodeURIComponent(analyzable.league.id)}`);
   const power = analysis.data;
@@ -58,7 +60,7 @@ async function get(path, type = 'json') {
   if (typeof intel.tactical.home?.observedGames !== 'number' || typeof intel.tactical.away?.observedGames !== 'number') throw new Error('Campione tattico non dichiarato');
   if (!Number.isFinite(intel.reliability.overall) || !Array.isArray(intel.reliability.items) || intel.reliability.items.length < 5) throw new Error('Reliability Ledger non valido');
 
-  const premierMatch = matches.data.matches.find(item => item.league.id === 'eng.1' && item.state !== 'post');
+  const premierMatch = matches.data.matches.find(item => item.league.id === 'eng.1' && item.state === 'pre' && new Date(item.date).getTime() > Date.now());
   let premierAvailability = null;
   if (premierMatch) {
     const premierIntel = await get(`/api/intelligence?event=${encodeURIComponent(premierMatch.id)}&league=eng.1`);
@@ -81,7 +83,7 @@ async function get(path, type = 'json') {
   const health = await get('/api/health');
   if (!Array.isArray(health.sources) || !health.sources.some(source => source.calls > 0 && source.lastSuccessAt) || !health.rule) throw new Error('Source Health Center non valido');
 
-  console.log(`✓ Homepage V4.6.0 e asset cache serviti`);
+  console.log(`✓ Homepage V4.7.0 e asset cache serviti`);
   console.log(`✓ Dossier-first, fallback trasparente e componenti ridondanti rimossi`);
   console.log(`✓ ${matches.data.matches.length} partite in ${matches.data.coverage?.competitions || 0} competizioni`);
   console.log(`✓ Power Model 2.1 operativo su ${analyzable.home.name}–${analyzable.away.name}`);

@@ -29,7 +29,7 @@ function createNode() {
     get('/api/news'),
     get('/api/standings?league=ita.1')
   ]);
-  const pre = matchesPayload.data.matches.find(match => match.state !== 'post');
+  const pre = matchesPayload.data.matches.find(match => match.state === 'pre' && new Date(match.date).getTime() > Date.now());
   if (!pre) throw new Error('Nessuna partita pre-match disponibile per il test frontend');
   const [analysisPayload, intelligencePayload, reviewPayload] = await Promise.all([
     get(`/api/analysis?event=${encodeURIComponent(pre.id)}&league=${encodeURIComponent(pre.league.id)}`),
@@ -55,7 +55,7 @@ function createNode() {
   context.globalThis = context;
 
   let source = fs.readFileSync('public/app.js', 'utf8').replace(/\ninit\(\);\s*$/, '\n');
-  source += '\nglobalThis.__test={state,safeUrl,teamLogo,newsCard,renderDashboard,renderMatchesView,renderRadarView,renderNewsView,renderStandingsView,renderFavoritesView,renderIntelligence,renderFallbackDeepAnalysis,renderPowerAnalysis,archivePreKickoffModel,reconcileModelSnapshots,modelTrackStats,readinessAssessment,captureSignalLifecycle,reconcileSignalLifecycles};';
+  source += '\nglobalThis.__test={state,safeUrl,teamLogo,newsCard,matchRow,renderDashboard,renderMatchesView,renderRadarView,renderNewsView,renderStandingsView,renderFavoritesView,renderIntelligence,renderFallbackDeepAnalysis,renderPowerAnalysis,archivePreKickoffModel,reconcileModelSnapshots,modelTrackStats,readinessAssessment,contextDateConflict,captureSignalLifecycle,reconcileSignalLifecycles};';
   vm.runInNewContext(source, context, { filename: 'public/app.js' });
   const test = context.__test;
   test.state.today = status.today;
@@ -102,14 +102,28 @@ function createNode() {
     console.log(`✓ ${name.padEnd(12)} ${String(html.length).padStart(6)} caratteri`);
   }
 
-  if (!renders.roomSummary.includes('MATCH CONTROL ROOM') || !renders.roomSummary.includes('MATCH READINESS GATE') || !renders.roomSummary.includes('EVIDENCE MAP') || !renders.roomSummary.includes('SIGNAL LIFECYCLE')) throw new Error('Sintesi Control Room non valida');
+  if (!renders.roomSummary.includes('MATCH CONTROL ROOM') || !renders.roomSummary.includes('MATCH READINESS GATE') || !renders.roomSummary.includes('PRE-MATCH TOTAL INTELLIGENCE') || !renders.roomSummary.includes('SIGNAL LIFECYCLE')) throw new Error('Sintesi Pre-Match Total Intelligence non valida');
+  if ((renders.roomSummary.match(/data-prematch-jump=/g) || []).length !== 6 || !renders.roomSummary.includes('non documentate')) throw new Error('Manifesto di copertura prematch incompleto');
+  const conflict = test.contextDateConflict({ event: { date: '2026-08-13T18:00:00Z' }, context: { phase: '2021-22 Qualifying' } });
+  if (!conflict.includes('Metadato contraddittorio') || test.contextDateConflict({ event: { date: '2026-08-13T18:00:00Z' }, context: { phase: '2025-26 Qualifying' } })) throw new Error('Contraddizioni temporali del contesto non rilevate correttamente');
   if (!renders.roomTeams.includes('TACTICAL MATCHUP') || !renders.roomTeams.includes('AVAILABILITY INTELLIGENCE')) throw new Error('Area Squadre non raggruppata correttamente');
   if (!renders.roomNumbers.includes('POWER MODEL 2.1') || !renders.roomNumbers.includes('roomPowerMount')) throw new Error('Area Numeri non valida');
-  if (!renders.roomVerify.includes('What Changed · storia della partita') || !renders.roomVerify.includes('Data Reliability Ledger') || !renders.roomVerify.includes('Fonti e news collegate')) throw new Error('Area Verifiche non valida');
+  if (!renders.roomVerify.includes('EVIDENCE MAP') || !renders.roomVerify.includes('What Changed · storia della partita') || !renders.roomVerify.includes('Data Reliability Ledger') || !renders.roomVerify.includes('Fonti e news collegate')) throw new Error('Area Verifiche non valida');
   if (!renders.dashboard.includes('MODEL TRACK RECORD') || !renders.dashboard.includes('SOURCE HEALTH CENTER')) throw new Error('Track Record o Source Health Center non renderizzati');
+  if (!renders.dashboard.includes('PRE-MATCH WINDOW') || renders.dashboard.includes('LIVE PULSE')) throw new Error('Dashboard non centrata sul prematch');
+  if (!renders.matches.includes('DOSSIER PRE-MATCH') || renders.matches.includes('LIVE CONTROL')) throw new Error('Calendario ancora orientato al live');
   if (!renders.postDossier.includes('REVIEW') || !renders.postDossier.includes('Decisione chiusa') || !renders.fallback.includes('COPERTURA RIDOTTA')) throw new Error('Review adattiva o fallback trasparente non renderizzato');
-  const liveModel = test.renderPowerAnalysis({ ...analysisPayload.data, event: { ...analysisPayload.data.event, state: 'in', home: { ...analysisPayload.data.event.home, score: 1 }, away: { ...analysisPayload.data.event.away, score: 0 } } });
-  if (!liveModel.includes('Modello decisionale sospeso') || liveModel.includes('Probabilità 1-X-2')) throw new Error('Il modello rimane impropriamente attivo durante il live');
+  const inProgressIntel = { ...intelligencePayload.data, event: { ...intelligencePayload.data.event, state: 'in', home: { ...intelligencePayload.data.event.home, score: 1 }, away: { ...intelligencePayload.data.event.away, score: 0 } } };
+  const scoreOnly = test.renderIntelligence(inProgressIntel);
+  const pausedModel = test.renderPowerAnalysis({ ...analysisPayload.data, event: inProgressIntel.event });
+  if (!scoreOnly.includes('SCORE ESSENZIALE') || !scoreOnly.includes('Analisi live disattivata') || scoreOnly.includes('MATCH CONTROL ROOM') || scoreOnly.includes('Probabilità 1-X-2')) throw new Error('Un incontro in corso espone ancora il dossier live');
+  if (!pausedModel.includes('Analisi live disattivata') || pausedModel.includes('Probabilità 1-X-2')) throw new Error('Il modello rimane impropriamente attivo durante la gara');
+  const scoreRow = test.matchRow({ ...pre, state: 'in', home: { ...pre.home, score: 1, form: 'VVVVV' }, away: { ...pre.away, score: 0, form: 'SSSSS' } });
+  if (!scoreRow.includes('score-only-row') || scoreRow.includes('power-mini') || scoreRow.includes('form-dot') || scoreRow.includes('/100') || scoreRow.includes('Analisi profonda')) throw new Error('La riga calendario live espone informazioni oltre allo score essenziale');
+  const closedPrematchRow = test.matchRow({ ...pre, state: 'pre', date: new Date(Date.now() - 60000).toISOString() });
+  if (!closedPrematchRow.includes('score-only-row') || closedPrematchRow.includes('/100') || closedPrematchRow.includes('form-dot')) throw new Error('Una finestra pre-match scaduta espone ancora analisi');
+  const reviewRow = test.matchRow({ ...pre, state: 'post', home: { ...pre.home, score: 2 }, away: { ...pre.away, score: 1 } });
+  if (!reviewRow.includes('REVIEW') || !reviewRow.includes('Archivio partita') || reviewRow.includes('/100')) throw new Error('La riga post-partita espone ancora un indice post-hoc');
   if (!renders.matches.includes('Analisi profonda') && !renders.matches.includes('Analisi pronta') && !renders.matches.includes('Review pronta')) throw new Error('Indicatore Deep Analysis assente dalle partite');
 
   if (test.safeUrl('') !== '' || test.safeUrl('   ') !== '' || test.safeUrl('javascript:alert(1)') !== '') throw new Error('safeUrl accetta URL vuoti o pericolosi');
@@ -154,7 +168,7 @@ function createNode() {
   if (test.captureSignalLifecycle({ ...lifecycleMatch, state: 'post' }, 'T-10')) throw new Error('Signal Lifecycle accetta uno snapshot post-hoc');
 
   const css = fs.readFileSync('public/styles.css', 'utf8');
-  for (const marker of ['@media (max-width: 720px)', '@media (max-width: 420px)', 'prefers-reduced-motion', '.deep-dive.fallback', '.preseason-reading', '.operations-deck', '.availability-desk', '.match-history', '.match-control-room', '.match-room-tabs', '.readiness-gate', '.evidence-map', '.signal-lifecycle', '.lifecycle-card', '.deep-story p { margin: 0; color: var(--muted); font-size: 10.5px;']) {
+  for (const marker of ['@media (max-width: 720px)', '@media (max-width: 420px)', 'prefers-reduced-motion', '.deep-dive.fallback', '.preseason-reading', '.operations-deck', '.availability-desk', '.match-history', '.match-control-room', '.match-room-tabs', '.readiness-gate', '.evidence-map', '.signal-lifecycle', '.lifecycle-card', '.prematch-total-intelligence', '.prematch-manifest', '.score-only-live', '.deep-story p { margin: 0; color: var(--muted); font-size: 10.5px;']) {
     if (!css.includes(marker)) throw new Error(`Regola CSS mancante: ${marker}`);
   }
   console.log('Frontend test completato: viste, dossier, URL, fallback grafici e pre-season validi.');
