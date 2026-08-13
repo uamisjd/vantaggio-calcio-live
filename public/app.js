@@ -3,6 +3,13 @@
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 
+function readLocalJson(key, fallback) {
+  try {
+    const value = JSON.parse(localStorage.getItem(key) || 'null');
+    return value ?? fallback;
+  } catch { return fallback; }
+}
+
 const state = {
   currentView: (location.hash || '#dashboard').slice(1),
   leagues: [],
@@ -12,6 +19,11 @@ const state = {
   tables: {},
   analyses: {},
   intelligence: {},
+  teamDna: {},
+  fixtureLedger: readLocalJson('vantaggio:fixtureLedger', {}),
+  changeLog: readLocalJson('vantaggio:changeLog', []),
+  kickoffChecks: readLocalJson('vantaggio:kickoffChecks', {}),
+  kickoffRunning: false,
   powerPicks: [],
   powerLoading: false,
   coverage: { competitions: 0, globalCalendar: false },
@@ -24,8 +36,8 @@ const state = {
   selectedDate: 'all',
   newsSource: 'all',
   standingsLeague: 'ita.1',
-  favorites: new Set(JSON.parse(localStorage.getItem('vantaggio:favorites') || '[]')),
-  favoriteSnapshots: JSON.parse(localStorage.getItem('vantaggio:favoriteSnapshots') || '{}'),
+  favorites: new Set(readLocalJson('vantaggio:favorites', [])),
+  favoriteSnapshots: readLocalJson('vantaggio:favoriteSnapshots', {}),
   alertsEnabled: localStorage.getItem('vantaggio:alerts') === 'true',
   lastStates: {},
   refreshTimer: null
@@ -134,6 +146,7 @@ function toggleFavorite(id) {
   }
   saveFavorites();
   render();
+  void runKickoffWatch();
   if (!$('#modalLayer')?.hidden) openMatch(id);
 }
 
@@ -180,9 +193,59 @@ async function loadInitial() {
   loadPowerPicks();
 }
 
+function fixtureSnapshot(match) {
+  return {
+    id: match.id, date: match.date, state: match.state, venue: match.venue || '',
+    home: match.home.name, away: match.away.name,
+    homeScore: Number(match.home.score || 0), awayScore: Number(match.away.score || 0),
+    leagueId: match.league.id, leagueLabel: match.league.label,
+    updatedAt: new Date().toISOString()
+  };
+}
+
+function addChange(kind, title, text, match, signature = '') {
+  const id = `${match.id}:${kind}:${signature || text}`;
+  if (state.changeLog.some(item => item.id === id)) return;
+  state.changeLog.unshift({ id, kind, title, text, eventId: match.id, leagueId: match.league.id, home: match.home.name, away: match.away.name, happenedAt: new Date().toISOString(), seen: false });
+  state.changeLog = state.changeLog.slice(0, 60);
+  localStorage.setItem('vantaggio:changeLog', JSON.stringify(state.changeLog));
+}
+
+function trackFixtureChanges(matches) {
+  const oldLedger = state.fixtureLedger || {};
+  const hasBaseline = Object.keys(oldLedger).length > 0;
+  let newCount = 0;
+  matches.forEach(match => {
+    const old = oldLedger[match.id];
+    if (!old) {
+      if (hasBaseline && match.state === 'pre' && newCount < 8) {
+        addChange('new', 'Nuova partita pubblicata', `${match.home.name}–${match.away.name} è entrata nel calendario del ${displayDate(match.date)}.`, match, match.date);
+        newCount += 1;
+      }
+      return;
+    }
+    if (old.date && old.date !== match.date) addChange('time', 'Orario modificato', `${match.home.name}–${match.away.name}: nuovo calcio d’inizio ${displayDate(match.date)} alle ${fmtTime.format(new Date(match.date))}.`, match, match.date);
+    if (old.venue && match.venue && old.venue !== match.venue) addChange('venue', 'Sede aggiornata', `La partita ora risulta programmata a ${match.venue}.`, match, match.venue);
+    if (old.state !== match.state) {
+      if (match.state === 'in') addChange('live', 'Partita iniziata', `${match.home.name}–${match.away.name} è ora in diretta.`, match, 'live');
+      if (match.state === 'post') addChange('final', 'Risultato finale', `${match.home.name} ${match.home.score}–${match.away.score} ${match.away.name}.`, match, `${match.home.score}-${match.away.score}`);
+    }
+    if ((match.state === 'in' || match.state === 'post') && (old.homeScore !== Number(match.home.score || 0) || old.awayScore !== Number(match.away.score || 0))) {
+      addChange('score', 'Punteggio cambiato', `${match.home.name} ${match.home.score}–${match.away.score} ${match.away.name}.`, match, `${match.home.score}-${match.away.score}`);
+    }
+  });
+  const nextLedger = { ...oldLedger };
+  matches.forEach(match => { nextLedger[match.id] = fixtureSnapshot(match); });
+  const entries = Object.entries(nextLedger).sort((a, b) => new Date(b[1].updatedAt || b[1].date) - new Date(a[1].updatedAt || a[1].date)).slice(0, 500);
+  state.fixtureLedger = Object.fromEntries(entries);
+  localStorage.setItem('vantaggio:fixtureLedger', JSON.stringify(state.fixtureLedger));
+}
+
 function applyMatches(payload) {
   const previous = Object.fromEntries(state.matches.map(match => [match.id, match.state]));
-  state.matches = payload.data?.matches || [];
+  const incoming = payload.data?.matches || [];
+  trackFixtureChanges(incoming);
+  state.matches = incoming;
   state.coverage = payload.data?.coverage || { competitions: new Set(state.matches.map(match => match.league.id)).size, globalCalendar: false };
   state.dataMeta.matches = payload.meta || null;
   delete state.errors.matches;
@@ -195,6 +258,51 @@ function applyMatches(payload) {
     state.lastStates[match.id] = match.state;
   });
   saveFavorites();
+  void runKickoffWatch();
+}
+
+async function runKickoffWatch() {
+  if (state.kickoffRunning || !state.favorites.size) return;
+  const candidates = state.matches.filter(match => {
+    const minutes = (new Date(match.date).getTime() - Date.now()) / 60000;
+    return state.favorites.has(match.id) && match.state === 'pre' && minutes >= -2 && minutes <= 65;
+  }).sort((a, b) => new Date(a.date) - new Date(b.date)).slice(0, 4);
+  if (!candidates.length) return;
+  state.kickoffRunning = true;
+  try {
+    for (const match of candidates) {
+      const minutes = Math.max(0, Math.round((new Date(match.date).getTime() - Date.now()) / 60000));
+      const threshold = minutes <= 10 ? 10 : minutes <= 30 ? 30 : 60;
+      const checkKey = `${match.id}:${threshold}`;
+      if (state.kickoffChecks[checkKey]) continue;
+      state.kickoffChecks[checkKey] = new Date().toISOString();
+      localStorage.setItem('vantaggio:kickoffChecks', JSON.stringify(state.kickoffChecks));
+      const key = `${match.league.id}:${match.id}`;
+      const previousIntel = state.intelligence[key];
+      try {
+        const [analysisPayload, intelPayload] = await Promise.all([
+          api(`/api/analysis?event=${encodeURIComponent(match.id)}&league=${encodeURIComponent(match.league.id)}&fresh=1`),
+          api(`/api/intelligence?event=${encodeURIComponent(match.id)}&league=${encodeURIComponent(match.league.id)}&fresh=1`)
+        ]);
+        state.analyses[key] = analysisPayload.data;
+        state.intelligence[key] = intelPayload.data;
+        addChange('kickoff', `Kickoff Watch · ${threshold}'`, `Dossier ricontrollato: ${match.home.name}–${match.away.name}.`, match, `${threshold}:${intelPayload.data.generatedAt}`);
+        if (!previousIntel?.lineups?.official && intelPayload.data.lineups?.official) addChange('lineup', 'Formazioni ufficiali pubblicate', `Gli undici di ${match.home.name}–${match.away.name} sono disponibili nel dossier.`, match, 'official');
+        const previousNews = new Set((previousIntel?.news?.articles || []).map(article => article.id));
+        const newNews = (intelPayload.data.news?.articles || []).filter(article => !previousNews.has(article.id));
+        if (previousIntel && newNews.length) addChange('news', 'Nuovi segnali pre-partita', `${newNews.length} nuovi titoli collegati a ${match.home.name}–${match.away.name}.`, match, `${threshold}:${newNews.map(article => article.id).join(',')}`);
+        if (state.alertsEnabled && 'Notification' in window && Notification.permission === 'granted') {
+          new Notification(`Kickoff Watch · ${threshold} minuti`, { body: `${match.home.name}–${match.away.name}: dossier aggiornato${intelPayload.data.lineups?.official ? ', formazioni ufficiali disponibili' : ''}.`, icon: match.home.logo || '/favicon.svg' });
+        }
+      } catch {
+        delete state.kickoffChecks[checkKey];
+        localStorage.setItem('vantaggio:kickoffChecks', JSON.stringify(state.kickoffChecks));
+      }
+    }
+  } finally {
+    state.kickoffRunning = false;
+    if (['dashboard', 'favorites'].includes(state.currentView)) render();
+  }
 }
 
 function applyNews(payload) {
@@ -375,6 +483,20 @@ function broadcastFixture(match) {
   return `<button class="broadcast-fixture" data-match="${escapeHtml(match.id)}"><span class="broadcast-league"><i style="--league:${escapeHtml(match.league.accent || '#758bff')}"></i>${escapeHtml(match.league.label)}</span><div>${teamLogo(match.home, 'broadcast-logo')}<strong>${escapeHtml(match.home.abbreviation || match.home.name.slice(0, 3))}</strong><b>${match.state === 'pre' ? escapeHtml(fmtTime.format(new Date(match.date))) : escapeHtml(status.main)}</b><strong>${escapeHtml(match.away.abbreviation || match.away.name.slice(0, 3))}</strong>${teamLogo(match.away, 'broadcast-logo')}</div><small>${escapeHtml(match.insight.label)} · indice ${match.opportunity}</small></button>`;
 }
 
+function changeIcon(kind) {
+  return ({ new: 'star', time: 'clock', venue: 'ball', live: 'radar', final: 'shield', score: 'ball', lineup: 'table', news: 'news', kickoff: 'bell' })[kind] || 'info';
+}
+
+function changeDeskItem(item) {
+  return `<button class="change-item ${item.seen ? '' : 'unread'}" data-match="${escapeHtml(item.eventId)}"><span class="change-icon">${icon(changeIcon(item.kind))}</span><div><small>${escapeHtml(item.title)} · ${escapeHtml(relativeTime(item.happenedAt))}</small><strong>${escapeHtml(item.home)} — ${escapeHtml(item.away)}</strong><p>${escapeHtml(item.text)}</p></div>${icon('chevron')}</button>`;
+}
+
+function kickoffWatchItem(match) {
+  const minutes = Math.max(0, Math.round((new Date(match.date).getTime() - Date.now()) / 60000));
+  const armed = minutes <= 65;
+  return `<button class="kickoff-watch-item ${armed ? 'armed' : ''}" data-match="${escapeHtml(match.id)}"><span>${teamLogo(match.home, 'kickoff-logo')}${teamLogo(match.away, 'kickoff-logo')}</span><div><strong>${escapeHtml(match.home.name)} — ${escapeHtml(match.away.name)}</strong><small>${escapeHtml(displayDate(match.date))} · ${escapeHtml(fmtTime.format(new Date(match.date)))}</small></div><b>${armed ? `T-${minutes}'` : countdownText(match)}</b></button>`;
+}
+
 function renderDashboard() {
   const upcoming = filteredDashboardMatches();
   const radar = radarMatches(6);
@@ -387,6 +509,9 @@ function renderDashboard() {
   const [busyLeague, busyCount] = competitionPulse(todayItems);
   const strongest = state.powerPicks[0];
   const ticker = [...liveMatches, ...upcoming.filter(match => match.state !== 'in')].slice(0, 7);
+  const recentChanges = state.changeLog.slice(0, 5);
+  const unreadChanges = state.changeLog.filter(item => !item.seen).length;
+  const watchedKickoffs = state.matches.filter(match => state.favorites.has(match.id) && match.state === 'pre').sort((a, b) => new Date(a.date) - new Date(b.date)).slice(0, 4);
   const romeDateLabel = fmtLongDay.format(new Date(`${state.today}T12:00:00Z`));
   return `<div class="view dashboard-view v4-dashboard">
     ${renderHero(featured)}
@@ -398,6 +523,10 @@ function renderDashboard() {
         <article class="briefing-card intelligence-brief"><span>INTELLIGENCE SIGNAL</span><strong>${strongest?.analysis?.signals?.[0] ? `${strongest.analysis.signals[0].label} · ${strongest.analysis.signals[0].probability}%` : featured ? featured.insight.label : 'Analisi in preparazione'}</strong><p>${strongest ? `${strongest.match.home.name}–${strongest.match.away.name}, qualità dati ${strongest.analysis.engine.quality}/100.` : 'Il Power Model sta selezionando le partite con il campione più leggibile.'}</p></article>
         <article class="briefing-card coverage-brief"><span>COVERAGE DESK</span><strong>${coveredCompetitions} competizioni monitorate</strong><p>Calendario globale, feed gratuiti e controlli di qualità senza abbonamenti.</p></article>
       </div>
+    </section>
+    <section class="specialty-deck">
+      <article class="change-desk"><header><div><span class="section-code">WHAT CHANGED DESK</span><h2>Cosa è cambiato dall’ultima visita</h2></div>${unreadChanges ? `<button data-read-changes>Segna letti <b>${unreadChanges}</b></button>` : '<span class="desk-clear">Tutto letto</span>'}</header><div>${recentChanges.length ? recentChanges.map(changeDeskItem).join('') : `<div class="specialty-empty">${icon('shield')}<div><strong>Baseline attiva</strong><p>Da questo momento confronterò orari, sedi, stati, punteggi, formazioni e nuovi eventi con la visita precedente.</p></div></div>`}</div></article>
+      <article class="kickoff-watch"><header><div><span class="section-code">KICKOFF WATCH</span><h2>Controllo 60' · 30' · 10'</h2></div><span class="watch-status"><i></i>${state.alertsEnabled ? 'ALERT ON' : 'MONITOR'}</span></header><p class="kickoff-intro">Le partite salvate vengono ricontrollate vicino al calcio d’inizio: dossier, news e formazioni senza chiamate continue.</p><div>${watchedKickoffs.length ? watchedKickoffs.map(kickoffWatchItem).join('') : `<div class="specialty-empty compact">${icon('star')}<div><strong>Nessuna partita sorvegliata</strong><p>Salva una partita: entrerà automaticamente nel Kickoff Watch.</p></div></div>`}</div></article>
     </section>
     ${ticker.length ? `<section class="broadcast-strip"><header><span>ON AIR</span><div></div><small>Scorri il matchday</small></header><div class="broadcast-track">${ticker.map(broadcastFixture).join('')}</div></section>` : ''}
     <div class="dashboard-grid editorial-dashboard-grid">
@@ -575,7 +704,7 @@ function renderStandingsView() {
     const sixth = table[Math.min(5, table.length - 1)];
     const spread = sixth ? leader.points - sixth.points : 0;
     const started = leader.played > 0;
-    content = `<section class="league-pulse"><header><div><span class="broadcast-label"><i></i>LEAGUE PULSE</span><h2>${escapeHtml(data.league.label)}</h2><p>${escapeHtml(data.season || 'Stagione corrente')}</p></div><strong>${started ? `${leader.played} giornate lette` : 'Pre-season'}</strong></header><div class="league-pulse-grid"><article class="leader-pulse">${teamLogo({ ...leader.team, abbreviation: leader.team.name.slice(0, 3) }, 'pulse-logo')}<div><span>CAPOLISTA</span><strong>${escapeHtml(leader.team.name)}</strong><small>${leader.points} punti · ${titleGap ? `+${titleGap} sulla seconda` : 'classifica serrata'}</small></div></article><article><span>MIGLIOR ATTACCO</span><strong>${escapeHtml(bestAttack.team.name)}</strong><small>${bestAttack.goalsFor} gol segnati</small></article><article><span>MIGLIOR DIFESA</span><strong>${escapeHtml(bestDefense.team.name)}</strong><small>${bestDefense.goalsAgainst} gol subiti</small></article><article><span>RITMO DEL TORNEO</span><strong>${goalsPerGame}</strong><small>gol per partita disputata</small></article></div></section><div class="standings-layout intelligence-table-layout"><section class="standings-card"><header class="table-broadcast-head"><span>CLASSIFICA LIVE</span><small>PG partite · DR differenza reti · PPG punti per gara</small></header><div class="table-scroll"><table class="standings-table"><thead><tr><th>#</th><th>Squadra</th><th>PG</th><th>V</th><th>P</th><th>S</th><th>GF</th><th>GS</th><th>DR</th><th>PPG</th><th>PT</th></tr></thead><tbody>${table.map((row, index) => `<tr class="${index < 4 ? 'zone-ucl' : index >= table.length - 3 ? 'zone-drop' : ''}"><td><span class="rank-cell">${row.rank}</span></td><td class="standings-team">${teamLogo({ ...row.team, abbreviation: row.team.name.slice(0, 3) })}<strong>${escapeHtml(row.team.name)}</strong></td><td>${row.played}</td><td>${row.wins}</td><td>${row.draws}</td><td>${row.losses}</td><td>${row.goalsFor}</td><td>${row.goalsAgainst}</td><td>${row.difference > 0 ? '+' : ''}${row.difference}</td><td>${row.played ? (row.points / row.played).toFixed(2) : '–'}</td><td class="points">${row.points}</td></tr>`).join('')}</tbody></table></div></section><aside class="league-intelligence"><span class="section-code">TABLE INTELLIGENCE</span><h3>Come leggere la corsa</h3><div class="league-reading"><span>Distacco 1ª–6ª</span><strong>${spread} pt</strong><p>${spread <= 5 ? 'La parte alta è ancora molto compatta.' : 'La vetta sta creando una separazione visibile.'}</p></div><div class="league-reading"><span>Zona alta</span><strong>${table.slice(0, 4).map(row => row.team.name).join(' · ')}</strong></div><div class="zone-legend"><p><i></i>Fascia europea indicativa</p><p><i class="red"></i>Fascia retrocessione indicativa</p></div><div class="legend-note">Le fasce sono un aiuto visivo: criteri ufficiali, playoff e posti europei dipendono dalla competizione.</div></aside></div>`;
+    content = `<section class="league-pulse"><header><div><span class="broadcast-label"><i></i>LEAGUE PULSE</span><h2>${escapeHtml(data.league.label)}</h2><p>${escapeHtml(data.season || 'Stagione corrente')}</p></div><strong>${started ? `${leader.played} giornate lette` : 'Pre-season'}</strong></header><div class="league-pulse-grid"><article class="leader-pulse">${teamLogo({ ...leader.team, abbreviation: leader.team.name.slice(0, 3) }, 'pulse-logo')}<div><span>CAPOLISTA</span><strong>${escapeHtml(leader.team.name)}</strong><small>${leader.points} punti · ${titleGap ? `+${titleGap} sulla seconda` : 'classifica serrata'}</small></div></article><article><span>MIGLIOR ATTACCO</span><strong>${escapeHtml(bestAttack.team.name)}</strong><small>${bestAttack.goalsFor} gol segnati</small></article><article><span>MIGLIOR DIFESA</span><strong>${escapeHtml(bestDefense.team.name)}</strong><small>${bestDefense.goalsAgainst} gol subiti</small></article><article><span>RITMO DEL TORNEO</span><strong>${goalsPerGame}</strong><small>gol per partita disputata</small></article></div></section><div class="standings-layout intelligence-table-layout"><section class="standings-card"><header class="table-broadcast-head"><span>CLASSIFICA LIVE</span><small>PG partite · DR differenza reti · PPG punti per gara</small></header><div class="table-scroll"><table class="standings-table"><thead><tr><th>#</th><th>Squadra</th><th>PG</th><th>V</th><th>P</th><th>S</th><th>GF</th><th>GS</th><th>DR</th><th>PPG</th><th>PT</th></tr></thead><tbody>${table.map((row, index) => `<tr class="${index < 4 ? 'zone-ucl' : index >= table.length - 3 ? 'zone-drop' : ''}"><td><span class="rank-cell">${row.rank}</span></td><td class="standings-team">${teamLogo({ ...row.team, abbreviation: row.team.name.slice(0, 3) })}<strong>${escapeHtml(row.team.name)}</strong><button class="table-dna" data-team-dna="${escapeHtml(row.team.id)}" data-team-name="${escapeHtml(row.team.name)}" data-team-logo="${safeUrl(row.team.logo)}" data-team-league="${escapeHtml(state.standingsLeague)}">DNA</button></td><td>${row.played}</td><td>${row.wins}</td><td>${row.draws}</td><td>${row.losses}</td><td>${row.goalsFor}</td><td>${row.goalsAgainst}</td><td>${row.difference > 0 ? '+' : ''}${row.difference}</td><td>${row.played ? (row.points / row.played).toFixed(2) : '–'}</td><td class="points">${row.points}</td></tr>`).join('')}</tbody></table></div></section><aside class="league-intelligence"><span class="section-code">TABLE INTELLIGENCE</span><h3>Come leggere la corsa</h3><div class="league-reading"><span>Distacco 1ª–6ª</span><strong>${spread} pt</strong><p>${spread <= 5 ? 'La parte alta è ancora molto compatta.' : 'La vetta sta creando una separazione visibile.'}</p></div><div class="league-reading"><span>Zona alta</span><strong>${table.slice(0, 4).map(row => row.team.name).join(' · ')}</strong></div><div class="zone-legend"><p><i></i>Fascia europea indicativa</p><p><i class="red"></i>Fascia retrocessione indicativa</p></div><div class="legend-note">Le fasce sono un aiuto visivo: criteri ufficiali, playoff e posti europei dipendono dalla competizione.</div></aside></div>`;
   }
   return `<div class="view standings-view v4-standings">${viewHeader('TABLE LAB', 'Classifiche', 'Non solo posizioni: leadership, ritmo realizzativo, equilibrio della corsa e rendimento per gara.', actions)}${content}</div>`;
 }
@@ -597,7 +726,7 @@ function renderFavoritesView() {
   const competitions = new Set(matches.map(match => match.league.id)).size;
   return `<div class="view favorites-view v4-watchroom">
     ${viewHeader('MY MATCHROOM', 'Preferiti', 'La tua sala personale: prossimi appuntamenti, dossier già aperti e alert locali senza account.')}
-    ${matches.length ? `<section class="watchroom-hero"><div class="watchroom-copy"><span class="broadcast-label"><i></i>PRIVATE WATCHLIST</span><h2>La tua agenda.<br><em>Senza rumore.</em></h2><p>${matches.length} partite salvate in ${competitions} competizioni. Tutto resta esclusivamente su questo dispositivo.</p><div class="watchroom-kpis"><span><b>${live}</b>live</span><span><b>${analysed}</b>dossier aperti</span><span><b>${state.alertsEnabled ? 'ON' : 'OFF'}</b>alert</span></div></div>${next ? `<button class="next-watch" data-match="${escapeHtml(next.id)}"><header><span>NEXT ON YOUR RADAR</span><b>${escapeHtml(countdownText(next))}</b></header><div><span>${teamLogo(next.home, 'watch-logo')}<strong>${escapeHtml(next.home.name)}</strong></span><i>VS</i><span>${teamLogo(next.away, 'watch-logo')}<strong>${escapeHtml(next.away.name)}</strong></span></div><footer>${escapeHtml(next.league.label)} · ${escapeHtml(displayDate(next.date))} · ${escapeHtml(fmtTime.format(new Date(next.date)))}</footer></button>` : ''}</section><div class="watchroom-layout"><section class="section-card watchlist-card"><header class="section-head"><div><span class="section-code">SAVED FIXTURES</span><h2>Partite sotto osservazione</h2><p>Apri una riga per aggiornare il dossier completo</p></div></header><div class="match-list">${matches.map(matchRow).join('')}</div></section><aside class="watchroom-assistant"><span class="section-code">WATCH ASSISTANT</span><h3>Stato della stanza</h3><article>${icon('bell')}<div><strong>${state.alertsEnabled ? 'Alert locali attivi' : 'Alert locali disattivati'}</strong><p>${state.alertsEnabled ? 'Riceverai un avviso all’inizio delle partite salvate mentre il sito è aperto.' : 'Attivali dalla campanella in alto per seguire i cambi di stato.'}</p></div></article><article>${icon('radar')}<div><strong>${analysed}/${matches.length} dossier consultati</strong><p>Le analisi vengono ricalcolate quando apri la partita e rispettano la cache dati.</p></div></article><article>${icon('shield')}<div><strong>Privacy reale</strong><p>Nessun profilo, cookie pubblicitario o sincronizzazione esterna della watchlist.</p></div></article></aside></div>` : emptyState('star', 'La Matchroom è vuota', 'Tocca la stella accanto a una partita: qui nascerà una watchlist personale con countdown, dossier e alert.', '<button class="button primary" data-view="matches">Costruisci la Matchroom</button>')}
+    ${matches.length ? `<section class="watchroom-hero"><div class="watchroom-copy"><span class="broadcast-label"><i></i>PRIVATE WATCHLIST</span><h2>La tua agenda.<br><em>Senza rumore.</em></h2><p>${matches.length} partite salvate in ${competitions} competizioni. Tutto resta esclusivamente su questo dispositivo.</p><div class="watchroom-kpis"><span><b>${live}</b>live</span><span><b>${analysed}</b>dossier aperti</span><span><b>${state.alertsEnabled ? 'ON' : 'OFF'}</b>alert</span></div></div>${next ? `<button class="next-watch" data-match="${escapeHtml(next.id)}"><header><span>NEXT ON YOUR RADAR</span><b>${escapeHtml(countdownText(next))}</b></header><div><span>${teamLogo(next.home, 'watch-logo')}<strong>${escapeHtml(next.home.name)}</strong></span><i>VS</i><span>${teamLogo(next.away, 'watch-logo')}<strong>${escapeHtml(next.away.name)}</strong></span></div><footer>${escapeHtml(next.league.label)} · ${escapeHtml(displayDate(next.date))} · ${escapeHtml(fmtTime.format(new Date(next.date)))}</footer></button>` : ''}</section><div class="watchroom-layout"><section class="section-card watchlist-card"><header class="section-head"><div><span class="section-code">SAVED FIXTURES</span><h2>Partite sotto osservazione</h2><p>Apri una riga per aggiornare il dossier completo</p></div></header><div class="match-list">${matches.map(matchRow).join('')}</div></section><aside class="watchroom-assistant"><span class="section-code">WATCH ASSISTANT</span><h3>Stato della stanza</h3><article>${icon('bell')}<div><strong>${state.alertsEnabled ? 'Alert locali attivi' : 'Alert locali disattivati'}</strong><p>${state.alertsEnabled ? 'Kickoff Watch ricontrolla dossier e formazioni a 60, 30 e 10 minuti; gli alert funzionano mentre il sito è aperto.' : 'Attivali dalla campanella in alto per seguire i cambi di stato.'}</p></div></article><article>${icon('radar')}<div><strong>${analysed}/${matches.length} dossier consultati</strong><p>Le analisi vengono ricalcolate quando apri la partita e rispettano la cache dati.</p></div></article><article>${icon('shield')}<div><strong>Privacy reale</strong><p>Nessun profilo, cookie pubblicitario o sincronizzazione esterna della watchlist.</p></div></article></aside></div>` : emptyState('star', 'La Matchroom è vuota', 'Tocca la stella accanto a una partita: qui nascerà una watchlist personale con countdown, dossier e alert.', '<button class="button primary" data-view="matches">Costruisci la Matchroom</button>')}
   </div>`;
 }
 
@@ -614,6 +743,58 @@ function errorBlock(message, inline = false) {
   return `<section class="empty-state error-state"><div><span class="empty-icon">${icon('info')}</span><h2>Dati non disponibili</h2><p>${escapeHtml(message)}. Riprova tra poco: le altre sezioni continuano a funzionare.</p><button class="button" id="viewRefresh">${icon('refresh')} Riprova</button></div></section>`;
 }
 
+function reliabilityTone(score) {
+  return score >= 82 ? 'solid' : score >= 65 ? 'good' : score >= 45 ? 'partial' : 'weak';
+}
+
+function reliabilityLedgerMarkup(ledger, compact = false) {
+  if (!ledger) return '';
+  return `<section class="reliability-ledger ${compact ? 'compact' : ''}"><header><div><span class="section-code">RELIABILITY LEDGER</span><h4>Quanto è solida questa lettura?</h4></div><div class="reliability-dial ${reliabilityTone(ledger.overall)}" style="--reliability:${ledger.overall}"><span><b>${ledger.overall}</b><small>${escapeHtml(ledger.level)}</small></span></div></header><div class="reliability-rows">${(ledger.items || []).map(item => `<article><div><strong>${escapeHtml(item.label)}</strong><span>${escapeHtml(item.source || item.note || '')}</span></div><i><b class="${reliabilityTone(item.score)}" style="width:${clampClient(item.score, 0, 100)}%"></b></i><em>${Math.round(item.score)}</em><p>${escapeHtml(item.note || '')}</p></article>`).join('')}</div><footer>${icon('shield')}<span>${escapeHtml(ledger.rule || '')}</span></footer></section>`;
+}
+
+function teamDnaEvent(event) {
+  return `<article class="dna-event"><span class="result-chip ${String(event.result || '').toLowerCase()}">${escapeHtml(event.result || '–')}</span><div><strong>${escapeHtml(event.opponent)}</strong><small>${escapeHtml(event.competition)} · ${escapeHtml(displayDate(event.date))}</small></div><b>${escapeHtml(event.score || fmtTime.format(new Date(event.date)))}</b></article>`;
+}
+
+function renderTeamDna(data) {
+  const team = data.team;
+  const metrics = data.profile?.metrics || {};
+  const split = (label, item) => `<article><span>${label}</span><strong>${item.pointsPerGame ?? '–'}<small> PPG</small></strong><p>${item.played} gare · ${item.goalsFor ?? '–'} fatti · ${item.goalsAgainst ?? '–'} subiti</p></article>`;
+  return `<button class="modal-close dna-close" data-close-team-dna aria-label="Chiudi Team DNA">${icon('x')}</button><header class="dna-hero"><div class="dna-team-identity">${teamLogo(team, 'dna-hero-logo')}<div><span>VANTAGGIO TEAM DNA · CAMPIONE OSSERVATO</span><h2>${escapeHtml(team.name)}</h2><p>${escapeHtml(data.profile.style)}${team.standingSummary ? ` · ${escapeHtml(team.standingSummary)}` : ''}</p></div></div><div class="dna-confidence"><span>FIDUCIA DATI</span><strong>${data.reliability.overall}<small>/100</small></strong><p>${escapeHtml(data.reliability.level)}</p></div></header><div class="dna-body">
+    <section class="dna-manifesto"><span>IDENTITÀ IN UNA FRASE</span><h3>${escapeHtml(data.readings?.[0] || 'Profilo ancora da consolidare')}</h3><p>${escapeHtml(data.facts?.[0] || 'I risultati recenti non sono ancora sufficienti per una sintesi robusta.')}</p></section>
+    <section class="dna-fingerprint"><header><div><span class="section-code">FOOTBALL FINGERPRINT</span><h3>Impronta tecnica</h3></div><small>${data.profile.observedGames}/3 boxscore completi</small></header><div>${data.fingerprint.map(item => `<article class="${item.value == null ? 'missing' : ''}"><span>${escapeHtml(item.label)}</span><strong>${item.value ?? '–'}</strong><i><b style="width:${item.value ?? 0}%"></b></i><small>${escapeHtml(item.raw)}</small></article>`).join('')}</div></section>
+    <div class="dna-grid"><section class="dna-panel"><header><span class="section-code">RECENT CORE</span><h3>Ultime prestazioni</h3></header><div class="dna-core-kpis"><span><b>${data.recent.wins}</b>V</span><span><b>${data.recent.draws}</b>P</span><span><b>${data.recent.losses}</b>S</span><span><b>${data.recent.avgGoalsFor ?? '–'}</b>gol fatti</span><span><b>${data.recent.avgGoalsAgainst ?? '–'}</b>subiti</span></div><div class="dna-events">${data.recentEvents.length ? data.recentEvents.map(teamDnaEvent).join('') : '<p class="dna-empty">Risultati recenti non disponibili.</p>'}</div></section><section class="dna-panel"><header><span class="section-code">HOME / AWAY SPLIT</span><h3>Come cambia il profilo</h3></header><div class="dna-splits">${split('IN CASA', data.splits.home)}${split('IN TRASFERTA', data.splits.away)}</div><div class="dna-traits">${(data.profile.traits || []).map(text => `<p>${icon('chevron')}<span>${escapeHtml(text)}</span></p>`).join('')}${(data.profile.vulnerabilities || []).map(text => `<p class="weak">${icon('info')}<span>${escapeHtml(text)}</span></p>`).join('')}</div></section></div>
+    <section class="dna-evidence"><article><span>FATTI</span>${(data.facts || []).map(text => `<p>${escapeHtml(text)}</p>`).join('') || '<p>Nessun fatto sufficiente.</p>'}</article><article><span>LETTURE</span>${(data.readings || []).map(text => `<p>${escapeHtml(text)}</p>`).join('') || '<p>Lettura non disponibile.</p>'}</article><article><span>DA VERIFICARE</span>${(data.verifications || []).map(text => `<p>${escapeHtml(text)}</p>`).join('') || '<p>Nessun avviso aggiuntivo.</p>'}</article></section>
+    ${data.nextEvents.length ? `<section class="dna-next"><header><span class="section-code">NEXT LOAD</span><h3>Prossimi impegni</h3></header><div>${data.nextEvents.map(event => `<article><span>${escapeHtml(displayDate(event.date))}</span><strong>${escapeHtml(event.opponent)}</strong><small>${escapeHtml(event.competition)} · ${escapeHtml(fmtTime.format(new Date(event.date)))}</small></article>`).join('')}</div></section>` : ''}
+    ${reliabilityLedgerMarkup(data.reliability)}
+    <div class="intel-method">${icon('shield')}<span>${escapeHtml(data.methodology)}</span></div>
+  </div>`;
+}
+
+async function openTeamDna(teamId, teamName, teamLogoUrl, leagueId) {
+  if (!teamId) return;
+  const layer = $('#teamDnaLayer');
+  const modal = $('#teamDnaModal');
+  layer.hidden = false;
+  document.body.style.overflow = 'hidden';
+  modal.innerHTML = `<button class="modal-close dna-close" data-close-team-dna aria-label="Chiudi Team DNA">${icon('x')}</button><header class="dna-hero loading"><div class="dna-team-identity">${teamLogo({ id: teamId, name: teamName, logo: teamLogoUrl }, 'dna-hero-logo')}<div><span>TEAM DNA</span><h2>${escapeHtml(teamName || 'Squadra')}</h2><p>Ricostruisco risultati, split e impronta tecnica…</p></div></div></header><div class="dna-loading"><i></i><i></i><i></i></div>`;
+  const key = `${leagueId}:${teamId}`;
+  try {
+    if (!state.teamDna[key]) {
+      const payload = await api(`/api/team-dna?team=${encodeURIComponent(teamId)}&league=${encodeURIComponent(leagueId || 'all')}&name=${encodeURIComponent(teamName || '')}`);
+      state.teamDna[key] = payload.data;
+    }
+    if (!layer.hidden) modal.innerHTML = renderTeamDna(state.teamDna[key]);
+  } catch (error) {
+    if (!layer.hidden) modal.innerHTML = `<button class="modal-close dna-close" data-close-team-dna aria-label="Chiudi">${icon('x')}</button><div class="dna-error">${icon('info')}<h2>Team DNA non disponibile</h2><p>${escapeHtml(error.message)}</p></div>`;
+  }
+}
+
+function closeTeamDna() {
+  $('#teamDnaLayer').hidden = true;
+  if ($('#modalLayer').hidden && $('#searchLayer').hidden) document.body.style.overflow = '';
+}
+
 function findMatch(id) {
   return state.matches.find(match => match.id === id) || state.favoriteSnapshots[id];
 }
@@ -627,7 +808,7 @@ function openMatch(id) {
   modal.dataset.eventId = match.id;
   modal.style.setProperty('--league-color', match.league.accent || '#c8ff52');
   modal.innerHTML = `<button class="modal-close" data-close-modal aria-label="Chiudi">${icon('x')}</button>
-    <header class="modal-hero"><span class="modal-competition"><i></i>${escapeHtml(match.league.label)} ${match.round ? `· ${escapeHtml(match.round)}` : ''}</span><div class="modal-fixture"><div class="modal-team">${teamLogo(match.home, 'modal-logo')}<strong>${escapeHtml(match.home.name)}</strong></div><div class="modal-score"><strong>${escapeHtml(status.main)}</strong><span>${escapeHtml(status.sub)}</span></div><div class="modal-team">${teamLogo(match.away, 'modal-logo')}<strong>${escapeHtml(match.away.name)}</strong></div></div></header>
+    <header class="modal-hero"><span class="modal-competition"><i></i>${escapeHtml(match.league.label)} ${match.round ? `· ${escapeHtml(match.round)}` : ''}</span><div class="modal-fixture"><div class="modal-team">${teamLogo(match.home, 'modal-logo')}<strong>${escapeHtml(match.home.name)}</strong><button class="dna-trigger" data-team-dna="${escapeHtml(match.home.id)}" data-team-name="${escapeHtml(match.home.name)}" data-team-logo="${safeUrl(match.home.logo)}" data-team-league="${escapeHtml(match.league.id)}">TEAM DNA</button></div><div class="modal-score"><strong>${escapeHtml(status.main)}</strong><span>${escapeHtml(status.sub)}</span></div><div class="modal-team">${teamLogo(match.away, 'modal-logo')}<strong>${escapeHtml(match.away.name)}</strong><button class="dna-trigger" data-team-dna="${escapeHtml(match.away.id)}" data-team-name="${escapeHtml(match.away.name)}" data-team-logo="${safeUrl(match.away.logo)}" data-team-league="${escapeHtml(match.league.id)}">TEAM DNA</button></div></div></header>
     <div class="modal-body"><div class="modal-meta-grid"><div class="modal-meta"><span>Data e ora</span><strong>${escapeHtml(displayDate(match.date, true))} · ${escapeHtml(fmtTime.format(new Date(match.date)))}</strong></div><div class="modal-meta"><span>Stadio</span><strong title="${escapeHtml(match.venue)}">${escapeHtml(match.venue)}</strong></div><div class="modal-meta"><span>Indice interesse</span><strong>${match.opportunity}/100</strong></div></div>
       <div id="advancedAnalysis">${analysisLoading()}</div>
       <div id="matchIntelligence"><section class="intel-loading"><span class="intel-mark">INTELLIGENCE</span><strong>Preparo contesto, tattica, calendario e notizie…</strong><i></i></section></div>
@@ -713,8 +894,10 @@ async function loadIntelligence(match, force = false) {
     return;
   }
   try {
+    const previous = state.intelligence[key];
     const payload = await api(`/api/intelligence?event=${encodeURIComponent(match.id)}&league=${encodeURIComponent(match.league.id)}${force ? '&fresh=1' : ''}`);
     state.intelligence[key] = payload.data;
+    if (!previous?.lineups?.official && payload.data.lineups?.official) addChange('lineup', 'Formazioni ufficiali pubblicate', `Gli undici di ${match.home.name}–${match.away.name} sono disponibili nel dossier.`, match, 'official');
     if ($('#matchModal')?.dataset.eventId === match.id && $('#matchIntelligence')) $('#matchIntelligence').innerHTML = renderIntelligence(payload.data);
   } catch (error) {
     if ($('#matchModal')?.dataset.eventId === match.id && $('#matchIntelligence')) {
@@ -754,7 +937,7 @@ function renderIntelligence(data) {
   const tournamentMarkup = (data.tournamentStats || []).length ? `<div class="tournament-intel"><span class="section-overline">NUMERI NEL TORNEO</span><div>${data.tournamentStats.map(team => `<article>${teamLogo(team, 'intel-team-logo')}<strong>${escapeHtml(team.name)}</strong><span><b>${team.goals ?? '–'}</b>gol</span><span><b>${team.conceded ?? '–'}</b>subiti</span><span><b>${team.goalDifference == null ? '–' : team.goalDifference > 0 ? `+${team.goalDifference}` : team.goalDifference}</b>diff.</span></article>`).join('')}</div></div>` : '';
   const newsMarkup = (data.news?.articles || []).length ? data.news.articles.map(article => `<article class="intel-news" data-news-url="${safeUrl(article.link)}" tabindex="0"><header><span>${escapeHtml(article.tag)}</span><em class="${escapeHtml(article.reliability || 'da_verificare')}">${article.reliability === 'forte' ? 'Fonte forte' : article.reliability === 'media' ? 'Fonte nota' : 'Da verificare'}</em></header><h5>${escapeHtml(article.title)}</h5><div><b>${escapeHtml(article.publisher)}</b><small>${article.published ? escapeHtml(displayNewsDate(article.published)) : ''}</small>${icon('external')}</div></article>`).join('') : `<div class="intel-empty">Nessun articolo chiaramente collegato trovato nelle fonti indicizzate.</div>`;
   return `<section class="intelligence-room">
-    <header class="intel-title"><div><span class="intel-mark">MATCH INTELLIGENCE</span><h3>Quello che i numeri non raccontano</h3></div><div class="intel-live"><i></i>CONTESTO LIVE</div></header>
+    <header class="intel-title"><div><span class="intel-mark">MATCH INTELLIGENCE</span><h3>Quello che i numeri non raccontano</h3></div><div class="intel-live"><i></i>AFFIDABILITÀ ${data.reliability?.overall ?? '–'}/100</div></header>
     <article class="context-spotlight"><div><span>LA COSA PIÙ IMPORTANTE DA SAPERE</span><h4>${escapeHtml(context.scenario || 'Contesto partita')}</h4><p>${escapeHtml(context.facts?.[0] || data.keyQuestion)}</p>${context.venue?.name ? `<div class="intel-venue">${icon('pin')}<span>${escapeHtml(context.venue.name)}${context.venue.city ? ` · ${escapeHtml(context.venue.city)}` : ''}${context.venue.country ? `, ${escapeHtml(context.venue.country)}` : ''}</span></div>` : ''}</div>${aggregateMarkup}</article>
     <article class="key-question">${icon('radar')}<div><span>LA DOMANDA DECISIVA</span><strong>${escapeHtml(data.keyQuestion)}</strong></div></article>
     <div class="intel-legend"><span><i class="fact"></i>Fatto dal feed</span><span><i class="reading"></i>Lettura derivata</span><span><i class="verify"></i>Da verificare</span></div>
@@ -765,6 +948,7 @@ function renderIntelligence(data) {
     <details class="intel-details"><summary><div><span>04</span><strong>Numeri e giocatori chiave nel torneo</strong></div>${icon('chevron')}</summary>${tournamentMarkup}<div class="leaders-intel-grid">${(data.leaders || []).map(leaderIntelCard).join('') || '<div class="intel-empty">Leader del torneo non disponibili nel feed.</div>'}</div></details>
     <details class="intel-details"><summary><div><span>05</span><strong>Formazioni e disponibilità</strong></div>${icon('chevron')}</summary>${lineupIntel(data.lineups, data.availability)}</details>
     <details class="intel-details"><summary><div><span>06</span><strong>News Pulse collegato alla partita</strong></div>${icon('chevron')}</summary><div class="intel-news-grid">${newsMarkup}</div><p class="news-disclaimer">${escapeHtml(data.news?.disclaimer || '')}</p></details>
+    <details class="intel-details reliability-details"><summary><div><span>07</span><strong>Data Reliability Ledger</strong></div>${icon('chevron')}</summary>${reliabilityLedgerMarkup(data.reliability, true)}</details>
     ${(data.alerts || []).length ? `<section class="red-flags"><header>${icon('info')}<div><span>RED FLAGS</span><strong>Cosa può invalidare una lettura superficiale</strong></div></header>${data.alerts.map(alert => `<article class="${alert.level}"><i></i><div><strong>${escapeHtml(alert.title)}</strong><p>${escapeHtml(alert.text)}</p></div></article>`).join('')}</section>` : ''}
     <div class="intel-method">${icon('shield')}<span>${escapeHtml(data.methodology)}</span></div>
   </section>`;
@@ -774,14 +958,14 @@ function openInfo() {
   const modal = $('#matchModal');
   delete modal.dataset.eventId;
   modal.style.removeProperty('--league-color');
-  modal.innerHTML = `<button class="modal-close" data-close-modal aria-label="Chiudi">${icon('x')}</button><header class="modal-hero"><span class="modal-competition"><i></i>TRASPARENZA</span><div style="position:relative;z-index:1;margin-top:24px"><h2 style="margin:0 0 8px;font-size:26px">Dati gratuiti, metodo chiaro.</h2><p style="margin:0;color:rgba(255,255,255,.65);font-size:11px;line-height:1.5">Nessun abbonamento e nessuna chiave API a pagamento.</p></div></header><div class="modal-body"><section class="analysis-box"><div class="analysis-box-head"><span>Fonti attive</span><strong>Feed pubblici</strong></div><p>Partite, contesto del torneo, statistiche tecniche, calendari e classifiche: feed pubblico ESPN. News Pulse: Google News, usato solo per titoli datati e collegamenti alle fonti. ANSA Calcio e Football Italia alimentano la sezione notizie.</p></section><section class="form-comparison"><h3>Come si aggiorna</h3><p style="color:var(--muted);font-size:10px;line-height:1.6">Le partite vengono ricontrollate ogni 90 secondi mentre il sito è aperto; le notizie ogni pochi minuti. A mezzanotte il calendario avanza automaticamente sul nuovo giorno nel fuso Europe/Rome. In caso di errore temporaneo, viene mantenuta l’ultima risposta valida in cache.</p><h3 style="margin-top:18px">Power Model 2.1 + Match Intelligence</h3><p style="color:var(--muted);font-size:10px;line-height:1.6">Il Power Model combina distribuzione di Poisson, forma, precedenti, fattore campo e consenso di mercato senza margine quando presente. Match Intelligence aggiunge fase e aggregato, riposo, carico gare, campioni tecnici recenti, giocatori chiave, formazioni ufficiali e news pertinenti. Ogni elemento è marcato come fatto, lettura derivata o dato da verificare. Nessun esito è garantito.</p></section><div class="modal-note">${icon('shield')}<span>Preferiti, tema e alert sono salvati localmente nel browser. Il sito non richiede account e non invia dati personali.</span></div><div class="modal-actions"><button class="button primary" data-close-modal>Ho capito</button></div></div>`;
+  modal.innerHTML = `<button class="modal-close" data-close-modal aria-label="Chiudi">${icon('x')}</button><header class="modal-hero"><span class="modal-competition"><i></i>TRASPARENZA</span><div style="position:relative;z-index:1;margin-top:24px"><h2 style="margin:0 0 8px;font-size:26px">Dati gratuiti, metodo chiaro.</h2><p style="margin:0;color:rgba(255,255,255,.65);font-size:11px;line-height:1.5">Nessun abbonamento e nessuna chiave API a pagamento.</p></div></header><div class="modal-body"><section class="analysis-box"><div class="analysis-box-head"><span>Fonti attive</span><strong>Feed pubblici</strong></div><p>Partite, contesto del torneo, statistiche tecniche, calendari e classifiche: feed pubblico ESPN. News Pulse: Google News, usato solo per titoli datati e collegamenti alle fonti. ANSA Calcio e Football Italia alimentano la sezione notizie.</p></section><section class="form-comparison"><h3>Come si aggiorna</h3><p style="color:var(--muted);font-size:10px;line-height:1.6">Le partite vengono ricontrollate ogni 90 secondi mentre il sito è aperto; le notizie ogni pochi minuti. A mezzanotte il calendario avanza automaticamente sul nuovo giorno nel fuso Europe/Rome. In caso di errore temporaneo, viene mantenuta l’ultima risposta valida in cache.</p><h3 style="margin-top:18px">Power Model 2.1 + Match Intelligence</h3><p style="color:var(--muted);font-size:10px;line-height:1.6">Il Power Model combina distribuzione di Poisson, forma, precedenti, fattore campo e consenso di mercato senza margine quando presente. Match Intelligence aggiunge fase e aggregato, riposo, carico gare, campioni tecnici recenti, giocatori chiave, formazioni ufficiali e news pertinenti. Ogni elemento è marcato come fatto, lettura derivata o dato da verificare. Nessun esito è garantito.</p><h3 style="margin-top:18px">Specialità V4.1</h3><p style="color:var(--muted);font-size:10px;line-height:1.6">What Changed confronta localmente visite e refresh; Kickoff Watch ricontrolla le partite salvate a 60, 30 e 10 minuti; Team DNA costruisce un profilo trasparente su risultati e boxscore disponibili; Reliability Ledger misura copertura e solidità delle fonti, non la certezza dell’esito.</p></section><div class="modal-note">${icon('shield')}<span>Preferiti, tema e alert sono salvati localmente nel browser. Il sito non richiede account e non invia dati personali.</span></div><div class="modal-actions"><button class="button primary" data-close-modal>Ho capito</button></div></div>`;
   $('#modalLayer').hidden = false;
   document.body.style.overflow = 'hidden';
 }
 
 function closeModal() {
   $('#modalLayer').hidden = true;
-  document.body.style.overflow = '';
+  if ($('#teamDnaLayer').hidden) document.body.style.overflow = '';
 }
 
 function openSearch() {
@@ -796,7 +980,7 @@ function openSearch() {
 
 function closeSearch() {
   $('#searchLayer').hidden = true;
-  if ($('#modalLayer').hidden) document.body.style.overflow = '';
+  if ($('#modalLayer').hidden && $('#teamDnaLayer').hidden) document.body.style.overflow = '';
 }
 
 function renderSearchResults(query) {
@@ -822,7 +1006,7 @@ function renderSearchResults(query) {
   const sections = [];
   if (matchResults.length) sections.push(`<div class="search-section-label">PARTITE</div>${matchResults.map(match => `<button class="search-result search-match-result" data-search-match="${escapeHtml(match.id)}"><span class="search-result-score">${match.opportunity}</span><span><strong>${escapeHtml(match.home.name)} — ${escapeHtml(match.away.name)}</strong><span>${escapeHtml(match.league.label)} · ${escapeHtml(displayDate(match.date))}</span></span>${icon('chevron')}</button>`).join('')}`);
   if (leagues.length) sections.push(`<div class="search-section-label">COMPETIZIONI</div>${leagues.map(league => `<button class="search-result" data-search-league="${league.id}"><span class="search-result-icon">${icon('table')}</span><span><strong>${escapeHtml(league.label)}</strong><span>${escapeHtml(league.country)} · calendario e classifica</span></span>${icon('chevron')}</button>`).join('')}`);
-  if (teams.length) sections.push(`<div class="search-section-label">SQUADRE</div>${teams.map(item => `<button class="search-result" data-search-match="${escapeHtml(item.matches[0].id)}">${teamLogo(item.team, 'search-logo')}<span><strong>${escapeHtml(item.team.name)}</strong><span>${item.matches.length} ${item.matches.length === 1 ? 'partita disponibile' : 'partite disponibili'}</span></span>${icon('chevron')}</button>`).join('')}`);
+  if (teams.length) sections.push(`<div class="search-section-label">SQUADRE</div>${teams.map(item => `<button class="search-result" data-team-dna="${escapeHtml(item.team.id)}" data-team-name="${escapeHtml(item.team.name)}" data-team-logo="${safeUrl(item.team.logo)}" data-team-league="${escapeHtml(item.matches[0].league.id)}">${teamLogo(item.team, 'search-logo')}<span><strong>${escapeHtml(item.team.name)}</strong><span>Team DNA · ${item.matches.length} ${item.matches.length === 1 ? 'partita disponibile' : 'partite disponibili'}</span></span>${icon('chevron')}</button>`).join('')}`);
   if (newsResults.length) sections.push(`<div class="search-section-label">NEWSROOM</div>${newsResults.map(article => `<button class="search-result" data-search-news-url="${safeUrl(article.link)}"><span class="search-result-icon">${icon('news')}</span><span><strong>${escapeHtml(article.title)}</strong><span>${escapeHtml(article.source)} · ${escapeHtml(newsTopic(article))}</span></span>${icon('external')}</button>`).join('')}`);
   root.innerHTML = sections.length ? sections.join('') : `<div class="search-empty">Nessun risultato per “${escapeHtml(query)}”</div>`;
 }
@@ -864,6 +1048,8 @@ function setupEvents() {
     if (view) { event.preventDefault(); return goTo(view.dataset.view); }
     const fav = event.target.closest('[data-favorite]');
     if (fav) { event.preventDefault(); event.stopPropagation(); return toggleFavorite(fav.dataset.favorite); }
+    const dna = event.target.closest('[data-team-dna]');
+    if (dna) { event.preventDefault(); event.stopPropagation(); closeSearch(); return openTeamDna(dna.dataset.teamDna, dna.dataset.teamName, dna.dataset.teamLogo, dna.dataset.teamLeague); }
     const match = event.target.closest('[data-match]');
     if (match) return openMatch(match.dataset.match);
     const dashLeague = event.target.closest('[data-dashboard-league]');
@@ -882,8 +1068,10 @@ function setupEvents() {
     if (searchLeague) { state.matchLeague = searchLeague.dataset.searchLeague; state.selectedDate = 'all'; closeSearch(); return goTo('matches'); }
     const searchNews = event.target.closest('[data-search-news-url]');
     if (searchNews) { const url = safeUrl(searchNews.dataset.searchNewsUrl); closeSearch(); if (url) window.open(url, '_blank', 'noopener,noreferrer'); return; }
+    if (event.target.closest('[data-close-team-dna]')) return closeTeamDna();
     if (event.target.closest('[data-close-modal]')) return closeModal();
     if (event.target.closest('[data-close-search]')) return closeSearch();
+    if (event.target.closest('[data-read-changes]')) { state.changeLog = state.changeLog.map(item => ({ ...item, seen: true })); localStorage.setItem('vantaggio:changeLog', JSON.stringify(state.changeLog)); return render(); }
     if (event.target.closest('#viewRefresh')) return refreshAll(true);
   });
 
@@ -906,7 +1094,7 @@ function setupEvents() {
 
   document.addEventListener('keydown', event => {
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); openSearch(); }
-    if (event.key === 'Escape') { if (!$('#searchLayer').hidden) closeSearch(); else if (!$('#modalLayer').hidden) closeModal(); }
+    if (event.key === 'Escape') { if (!$('#teamDnaLayer').hidden) closeTeamDna(); else if (!$('#searchLayer').hidden) closeSearch(); else if (!$('#modalLayer').hidden) closeModal(); }
     if (!$('#searchLayer').hidden && ['ArrowDown', 'ArrowUp'].includes(event.key)) {
       const results = $$('.search-result', $('#searchResults'));
       if (results.length) {

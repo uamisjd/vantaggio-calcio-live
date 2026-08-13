@@ -1,4 +1,4 @@
-# VANTAGGIO 4.0 — The Football Intelligence Experience
+# VANTAGGIO 4.1 — The Football Intelligence Experience
 
 Portale calcistico responsive in italiano che unisce calendario globale, live score, probabilità e **Match Intelligence** in un’identità ibrida esclusiva: regia broadcast, data room e magazine editoriale. Funziona senza API a pagamento, senza account utente e senza dipendenze npm.
 
@@ -12,6 +12,14 @@ Portale calcistico responsive in italiano che unisce calendario globale, live sc
 - **Preferiti / My Matchroom**: countdown, prossimo evento, dossier consultati, alert e privacy locale.
 - **Scout Search**: ricerca trasversale di partite, squadre, competizioni e notizie con navigazione da tastiera.
 - **Match dossier**: Power Model 2.1 e Intelligence Room rimangono il livello più profondo.
+
+## Specialità V4.1
+
+- **What Changed Desk**: crea una baseline locale e segnala nuovi eventi, variazioni di orario o sede, inizio/fine, punteggi, lineup e nuovi segnali pre-partita. Il registro resta sul dispositivo.
+- **Kickoff Watch**: per le partite salvate esegue un ricontrollo mirato a 60, 30 e 10 minuti dal calcio d’inizio, senza polling costoso continuo; può notificare quando il browser è aperto.
+- **Team DNA**: dossier squadra richiamabile dal match, dalla ricerca o dalla classifica, con risultati, split casa/trasferta, fingerprint tecnico, fatti, letture e limiti del campione.
+- **Data Reliability Ledger**: valuta separatamente contesto, calendario, boxscore tecnici, formazioni, news e disponibilità. Misura la qualità informativa, non la certezza di un pronostico.
+- Lo **Scenario Lab** non è incluso, come richiesto.
 
 ## Match Intelligence
 
@@ -68,10 +76,11 @@ Le fonti possono essere parziali o cambiare formato. Il backend normalizza i dat
 
 - Node.js 18+, zero dipendenze runtime;
 - `/api/analysis`: Power Model e contesto essenziale, cache 10 minuti;
-- `/api/intelligence`: calendario, tattica, copione, giocatori e news, cache separata 10 minuti;
+- `/api/intelligence`: calendario, tattica, copione, giocatori, news e Reliability Ledger, cache separata 10 minuti;
+- `/api/team-dna`: profilo squadra, split, fingerprint tecnico e ledger, cache 30 minuti;
 - snapshot tecnici recenti: massimo tre eventi per squadra, cache 30 minuti;
 - endpoint leggeri per partite, classifiche, notizie e stato servizio;
-- asset statici con versionamento cache `4.0.0`; cambio data automatico a mezzanotte nel fuso Europe/Rome.
+- asset statici con versionamento cache `4.1.0`; cambio data automatico a mezzanotte nel fuso Europe/Rome.
 
 ## Pubblicazione con URL stabile
 
@@ -94,7 +103,7 @@ npm run check
 npm test
 ```
 
-Lo smoke test verifica homepage e asset V4, stato servizio, partite, notizie, classifica, schema Power Model 2.1 e schema Match Intelligence, inclusa la distinzione fra fatti, letture e verifiche.
+Lo smoke test verifica homepage e asset V4.1, stato servizio, partite, notizie, classifica, Power Model 2.1, Match Intelligence 1.1, Reliability Ledger e Team DNA.
 
 ## Struttura
 

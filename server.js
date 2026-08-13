@@ -940,6 +940,151 @@ function calendarProfile(schedule, recent, eventDate, eventId) {
   };
 }
 
+function normalizeTeamScheduleEvents(schedule, teamId) {
+  return (schedule.events || []).map(event => {
+    const competition = event.competitions?.[0] || {};
+    const competitors = competition.competitors || [];
+    const team = competitors.find(item => String(item.id || item.team?.id) === String(teamId));
+    const opponent = competitors.find(item => String(item.id || item.team?.id) !== String(teamId));
+    if (!team || !opponent) return null;
+    const goalsFor = Number(team.score?.value ?? team.score?.displayValue ?? team.score ?? 0);
+    const goalsAgainst = Number(opponent.score?.value ?? opponent.score?.displayValue ?? opponent.score ?? 0);
+    const completed = competition.status?.type?.completed || competition.status?.type?.state === 'post';
+    return {
+      id: String(event.id || competition.id || ''),
+      date: event.date || competition.date || '',
+      completed,
+      state: competition.status?.type?.state || (completed ? 'post' : 'pre'),
+      homeAway: team.homeAway || '',
+      opponent: opponent.team?.shortDisplayName || opponent.team?.displayName || 'Avversario',
+      opponentLogo: opponent.team?.logos?.[0]?.href || opponent.team?.logo || '',
+      goalsFor, goalsAgainst,
+      result: !completed ? '' : goalsFor > goalsAgainst ? 'V' : goalsFor === goalsAgainst ? 'P' : 'S',
+      score: completed ? `${goalsFor}-${goalsAgainst}` : '',
+      competition: event.league?.name || event.league?.abbreviation || event.seasonType?.name || '',
+      venue: competition.venue?.fullName || '',
+      status: competition.status?.type?.shortDetail || competition.status?.type?.detail || ''
+    };
+  }).filter(Boolean).sort((a, b) => new Date(a.date) - new Date(b.date));
+}
+
+function recentSummaryForDna(events) {
+  const completed = events.filter(event => event.completed).slice(-5);
+  const played = completed.length;
+  const wins = completed.filter(event => event.result === 'V').length;
+  const draws = completed.filter(event => event.result === 'P').length;
+  const losses = completed.filter(event => event.result === 'S').length;
+  const goalsFor = completed.reduce((sum, event) => sum + event.goalsFor, 0);
+  const goalsAgainst = completed.reduce((sum, event) => sum + event.goalsAgainst, 0);
+  return {
+    played, wins, draws, losses, goalsFor, goalsAgainst,
+    avgGoalsFor: played ? round1(goalsFor / played) : null,
+    avgGoalsAgainst: played ? round1(goalsAgainst / played) : null,
+    pointsPerGame: played ? round1((wins * 3 + draws) / played) : null,
+    cleanSheets: completed.filter(event => event.goalsAgainst === 0).length,
+    failedToScore: completed.filter(event => event.goalsFor === 0).length,
+    events: completed
+  };
+}
+
+function reliabilityLabel(score) {
+  return score >= 82 ? 'Solida' : score >= 65 ? 'Buona' : score >= 45 ? 'Parziale' : 'Debole';
+}
+
+function buildMatchReliability(analysis, homeCalendar, awayCalendar, tactical, news) {
+  const contextSignals = [analysis.context.phase, analysis.context.venue?.name, analysis.context.isTwoLeg ? analysis.context.aggregate : true].filter(Boolean).length;
+  const contextScore = clamp(55 + contextSignals * 15, 0, 100);
+  const calendarKnown = [homeCalendar.restDays, awayCalendar.restDays].filter(value => value != null).length;
+  const calendarScore = calendarKnown === 2 ? 88 : calendarKnown === 1 ? 58 : 25;
+  const technicalGames = tactical.home.observedGames + tactical.away.observedGames;
+  const technicalScore = clamp(25 + technicalGames * 11, 25, 92);
+  const lineupScore = analysis.lineups.official ? 100 : 32;
+  const strongNews = news.filter(item => item.reliability === 'forte').length;
+  const knownNews = news.filter(item => item.reliability === 'media').length;
+  const newsScore = news.length ? clamp(38 + strongNews * 18 + knownNews * 10, 38, 92) : 28;
+  const availabilityScore = 24;
+  const items = [
+    { id: 'context', label: 'Contesto competizione', score: contextScore, source: 'ESPN event summary', note: analysis.context.isTwoLeg ? 'Fase, gara e aggregato letti dal feed evento.' : 'Fase, sede e stato gara letti dal feed evento.' },
+    { id: 'calendar', label: 'Riposo e calendario', score: calendarScore, source: 'ESPN team schedules', note: `${calendarKnown}/2 calendari con riposo calcolabile.` },
+    { id: 'technical', label: 'DNA tecnico recente', score: technicalScore, source: 'ESPN completed boxscores', note: `${technicalGames} campioni tecnici osservati su un massimo di 6.` },
+    { id: 'lineups', label: 'Formazioni', score: lineupScore, source: 'ESPN event rosters', note: analysis.lineups.official ? 'Entrambi gli undici ufficiali presenti.' : 'Undici ufficiali non ancora completi.' },
+    { id: 'news', label: 'News collegate', score: newsScore, source: 'Google News RSS + editori', note: `${news.length} articoli; ${strongNews} da fonte classificata forte.` },
+    { id: 'availability', label: 'Infortuni e squalifiche', score: availabilityScore, source: 'Nessun feed primario completo', note: 'Dato non elevato a fatto senza una fonte ufficiale affidabile.' }
+  ].map(item => ({ ...item, level: reliabilityLabel(item.score) }));
+  const weights = { context: .2, calendar: .15, technical: .25, lineups: .2, news: .1, availability: .1 };
+  const overall = Math.round(items.reduce((sum, item) => sum + item.score * weights[item.id], 0));
+  return { overall, level: reliabilityLabel(overall), items, rule: 'L’affidabilità misura copertura, provenienza e completezza dei dati; non la probabilità che un pronostico si realizzi.' };
+}
+
+async function getTeamDna(teamId, leagueId, teamName = '', force = false) {
+  if (!teamId) throw new Error('Squadra non specificata');
+  const season = new Date().getUTCFullYear();
+  return cached(`team-dna:v1:${teamId}:${leagueId}:${season}`, 30 * 60_000, async () => {
+    const schedule = await getTeamScheduleIntelligence(teamId, leagueId || 'all', nowIso());
+    const events = normalizeTeamScheduleEvents(schedule, teamId);
+    const recent = recentSummaryForDna(events);
+    const technicalCandidates = recent.events.slice(-3).reverse();
+    const settled = await Promise.allSettled(technicalCandidates.map(event => getPastMatchSnapshot(event, teamId)));
+    const snapshots = settled.filter(item => item.status === 'fulfilled' && item.value).map(item => item.value);
+    const name = schedule.team?.displayName || schedule.team?.name || teamName || 'Squadra';
+    const profile = buildTacticalProfile(name, snapshots, recent);
+    profile.teamId = String(teamId);
+    const splitFor = side => {
+      const sample = recent.events.filter(event => event.homeAway === side);
+      const wins = sample.filter(event => event.result === 'V').length;
+      const goalsFor = sample.reduce((sum, event) => sum + event.goalsFor, 0);
+      const goalsAgainst = sample.reduce((sum, event) => sum + event.goalsAgainst, 0);
+      return { played: sample.length, wins, pointsPerGame: sample.length ? round1((wins * 3 + sample.filter(event => event.result === 'P').length) / sample.length) : null, goalsFor: sample.length ? round1(goalsFor / sample.length) : null, goalsAgainst: sample.length ? round1(goalsAgainst / sample.length) : null };
+    };
+    const now = Date.now();
+    const next = events.filter(event => !event.completed && new Date(event.date).getTime() >= now).slice(0, 3);
+    const competitionMap = new Map();
+    recent.events.forEach(event => competitionMap.set(event.competition || 'Competizione', (competitionMap.get(event.competition || 'Competizione') || 0) + 1));
+    const metrics = profile.metrics;
+    const fingerprint = [
+      { id: 'territory', label: 'Controllo territoriale', value: metrics.possession == null ? null : Math.round(metrics.possession), raw: metrics.possession == null ? 'n/d' : `${metrics.possession}% possesso` },
+      { id: 'pressure', label: 'Pressione offensiva', value: metrics.shots == null ? null : clamp(Math.round(metrics.shots / 20 * 100), 0, 100), raw: metrics.shots == null ? 'n/d' : `${metrics.shots} tiri medi` },
+      { id: 'accuracy', label: 'Precisione al tiro', value: metrics.shots && metrics.shotsOnTarget != null ? clamp(Math.round(metrics.shotsOnTarget / metrics.shots * 100), 0, 100) : null, raw: metrics.shotsOnTarget == null ? 'n/d' : `${metrics.shotsOnTarget} in porta` },
+      { id: 'circulation', label: 'Pulizia del possesso', value: metrics.passAccuracy == null ? null : Math.round(metrics.passAccuracy), raw: metrics.passAccuracy == null ? 'n/d' : `${metrics.passAccuracy}% passaggi` },
+      { id: 'defensiveLoad', label: 'Carico difensivo', value: metrics.clearances == null ? null : clamp(Math.round(metrics.clearances / 35 * 100), 0, 100), raw: metrics.clearances == null ? 'n/d' : `${metrics.clearances} respinte` },
+      { id: 'discipline', label: 'Disciplina', value: metrics.yellowCards == null ? null : clamp(Math.round(100 - metrics.yellowCards / 4 * 100), 0, 100), raw: metrics.yellowCards == null ? 'n/d' : `${metrics.yellowCards} gialli medi` }
+    ];
+    const resultScore = Math.min(25, recent.played * 5);
+    const technicalScore = Math.min(45, profile.observedGames * 15);
+    const scheduleScore = events.length ? 15 : 0;
+    const sourceScore = 15;
+    const reliabilityScore = resultScore + technicalScore + scheduleScore + sourceScore;
+    const reliability = {
+      overall: reliabilityScore,
+      level: reliabilityLabel(reliabilityScore),
+      items: [
+        { label: 'Risultati recenti', score: resultScore / 25 * 100, note: `${recent.played}/5 gare disponibili` },
+        { label: 'Boxscore tecnici', score: technicalScore / 45 * 100, note: `${profile.observedGames}/3 gare con metriche` },
+        { label: 'Calendario squadra', score: scheduleScore / 15 * 100, note: events.length ? 'Feed calendario disponibile' : 'Feed non disponibile' },
+        { label: 'Provenienza', score: 100, note: 'Feed ESPN pubblico normalizzato' }
+      ].map(item => ({ ...item, score: Math.round(item.score), level: reliabilityLabel(item.score) })),
+      rule: 'Il Team DNA descrive il campione osservato e non viene presentato come identità permanente quando la copertura è ridotta.'
+    };
+    const facts = [];
+    if (recent.played) facts.push(`${name} ha raccolto ${recent.wins} vittorie, ${recent.draws} pareggi e ${recent.losses} sconfitte nelle ultime ${recent.played} disponibili.`);
+    if (recent.avgGoalsFor != null) facts.push(`Media recente: ${recent.avgGoalsFor} gol fatti e ${recent.avgGoalsAgainst} subiti.`);
+    if (profile.observedGames) facts.push(`Il profilo tecnico usa ${profile.observedGames} boxscore completi.`);
+    const readings = [profile.style, ...profile.traits].filter(Boolean).slice(0, 4);
+    const verifications = [];
+    if (profile.observedGames < 3) verifications.push(`Campione tecnico parziale: ${profile.observedGames}/3 gare complete.`);
+    if (!next.length) verifications.push('Prossimi impegni non disponibili nel calendario gratuito.');
+    return {
+      engine: { version: '1.0', name: 'VANTAGGIO Team DNA', generatedAt: nowIso() },
+      team: { id: String(teamId), name, abbreviation: schedule.team?.abbreviation || '', logo: schedule.team?.logo || '', color: schedule.team?.color || '', standingSummary: schedule.team?.standingSummary || '', recordSummary: schedule.team?.recordSummary || '' },
+      profile, fingerprint, recent, splits: { home: splitFor('home'), away: splitFor('away') },
+      recentEvents: recent.events.slice().reverse(), nextEvents: next,
+      competitions: [...competitionMap.entries()].map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count),
+      facts, readings, verifications, reliability,
+      methodology: 'Team DNA combina risultati recenti, split casa/trasferta e massimo tre boxscore tecnici completi. Ogni valore resta legato al campione visibile.'
+    };
+  }, force);
+}
+
 function parseGoogleNews(xml) {
   return [...xml.matchAll(/<item(?:\s[^>]*)?>([\s\S]*?)<\/item>/gi)].map((match, index) => {
     const block = match[1];
@@ -1056,8 +1201,9 @@ async function getIntelligence(eventId, leagueId, force = false) {
     if (availabilityNews.length) alerts.push({ level: 'media', title: 'News da verificare', text: `${availabilityNews.length} titoli recenti riguardano disponibilità o formazione: apri le fonti prima di considerarli confermati.` });
 
     const tactical = { home: homeTactical, away: awayTactical, matchup };
+    const reliability = buildMatchReliability(analysis, homeCalendar, awayCalendar, tactical, news);
     return {
-      engine: { version: '1.0', name: 'VANTAGGIO Match Intelligence', generatedAt: nowIso() },
+      engine: { version: '1.1', name: 'VANTAGGIO Match Intelligence', generatedAt: nowIso() },
       event: analysis.event,
       generatedAt: nowIso(),
       context: analysis.context,
@@ -1074,6 +1220,7 @@ async function getIntelligence(eventId, leagueId, force = false) {
         newsSignals: availabilityNews.length,
         message: 'Il feed gratuito non offre un elenco affidabile e completo di infortuni o squalifiche per questa gara. Nessuna assenza viene inventata: verifica comunicati ufficiali e formazione.'
       },
+      reliability,
       news: { articles: news.slice(0, 8), availabilitySignals: availabilityNews.length, disclaimer: 'I titoli sono segnali informativi, non conferme mediche o ufficiali: verifica sempre la fonte originale.' },
       alerts,
       keyQuestion: analysis.context.keyQuestion,
@@ -1183,6 +1330,14 @@ const server = http.createServer(async (req, res) => {
         const leagueId = requestUrl.searchParams.get('league') || '';
         const force = requestUrl.searchParams.get('fresh') === '1';
         const result = await getIntelligence(eventId, leagueId, force);
+        return jsonResponse(res, 200, { ok: true, data: result.value, meta: { fetchedAt: result.fetchedAt, stale: result.stale, cache: result.cache } });
+      }
+      if (pathname === '/api/team-dna') {
+        const teamId = requestUrl.searchParams.get('team') || '';
+        const leagueId = requestUrl.searchParams.get('league') || 'all';
+        const teamName = requestUrl.searchParams.get('name') || '';
+        const force = requestUrl.searchParams.get('fresh') === '1';
+        const result = await getTeamDna(teamId, leagueId, teamName, force);
         return jsonResponse(res, 200, { ok: true, data: result.value, meta: { fetchedAt: result.fetchedAt, stale: result.stale, cache: result.cache } });
       }
       return jsonResponse(res, 404, { ok: false, error: 'Endpoint non trovato' });

@@ -8,7 +8,7 @@
   <title>VANTAGGIO — Il calcio, letto meglio</title>
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="/styles.css?v=4.0.0">
+  <link rel="stylesheet" href="/styles.css?v=4.1.0">
 </head>
 <body>
   <svg class="svg-sprite" aria-hidden="true">
@@ -62,7 +62,7 @@
         <div><strong>Dati senza costi</strong><span>Feed pubblici con aggiornamento automatico.</span></div>
         <span class="source-dot" title="Stato fonti"></span>
       </div>
-      <div class="sidebar-foot"><span>V4.0</span><span>•</span><button id="sourceInfoButton">Fonti & trasparenza</button></div>
+      <div class="sidebar-foot"><span>V4.1</span><span>•</span><button id="sourceInfoButton">Fonti & trasparenza</button></div>
     </aside>
 
     <div class="workspace">
@@ -118,8 +118,13 @@
     <section class="match-modal" id="matchModal" role="dialog" aria-modal="true" aria-label="Analisi partita"></section>
   </div>
 
+  <div class="team-dna-layer" id="teamDnaLayer" hidden>
+    <button class="modal-backdrop" data-close-team-dna aria-label="Chiudi Team DNA"></button>
+    <section class="team-dna-modal" id="teamDnaModal" role="dialog" aria-modal="true" aria-label="Team DNA"></section>
+  </div>
+
   <div class="toast-region" id="toastRegion" aria-live="polite"></div>
 
-  <script src="/app.js?v=4.0.0" defer></script>
+  <script src="/app.js?v=4.1.0" defer></script>
 </body>
 </html>
