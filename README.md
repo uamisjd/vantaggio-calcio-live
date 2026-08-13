@@ -1,4 +1,4 @@
-# VANTAGGIO 4.3.1 — Dossier Cleanup & Audit Hardening
+# VANTAGGIO 4.4.0 — Transparency & Availability Intelligence
 
 Portale calcistico responsive in italiano che unisce calendario globale, live score, probabilità e **Match Intelligence** in un’identità ibrida esclusiva: regia broadcast, data room e magazine editoriale. Funziona senza API a pagamento, senza account utente e senza dipendenze npm.
 
@@ -12,6 +12,17 @@ Portale calcistico responsive in italiano che unisce calendario globale, live sc
 - **Preferiti / My Matchroom**: countdown, prossimo evento, dossier consultati, alert e privacy locale.
 - **Scout Search**: ricerca trasversale di partite, squadre, competizioni e notizie con navigazione da tastiera.
 - **Match dossier**: Deep Research/Review è il primo contenuto; il Power Model 2.1 resta disponibile in un cassetto tecnico separato.
+
+## Transparency & Availability Intelligence V4.4
+
+- **Model Track Record**: salva localmente solo la prima lettura realmente vista prima del kickoff. Lo snapshot è immutabile, viene riconciliato con il finale anche nelle visite successive e mostra accuratezza 1-X-2, Brier normalizzato, fiducia media e gap di calibrazione. Non esiste backfill post-hoc.
+- **Source Health Center**: espone stato osservato, ultimo successo, errori, chiamate valide, latenza media, ruolo e copertura di ciascuna fonte senza mostrare credenziali o URL sensibili. Salute tecnica e completezza editoriale restano concetti distinti.
+- **Availability Intelligence**: combina formazioni ufficiali dell'evento, injury feed espliciti, dataset ufficiale Fantasy Premier League per la sola Premier League e rassegna datata su infortuni, squalifiche, fitness e lineup.
+- **Gerarchia delle prove**: lineup e comunicati ufficiali → dataset ufficiali/provider espliciti → reporting forte → segnali da verificare. Sono visibili tier, timestamp, fonte, stato del giocatore e riscontri fra editori; un riscontro editoriale non diventa automaticamente conferma medica.
+- **Unknown by design**: feed vuoti, assenza di titoli e silenzio delle fonti non vengono mai tradotti in “rosa al completo”. Le formazioni ufficiali prevalgono su segnalazioni precedenti incompatibili.
+- **What Changed per partita**: ogni dossier contiene la propria cronologia locale di orario, sede, stato, punteggio, lineup e nuovi segnali, oltre al desk aggregato in dashboard.
+- **Table Lab esteso**: il catalogo classifiche è separato da quello del calendario e comprende 16 competizioni verificate sul feed, senza appesantire le richieste dello scoreboard globale.
+- L'estensione **offline PWA** non è stata implementata, come richiesto: aggiornamenti e fonti live richiedono connessione.
 
 ## Dossier Cleanup V4.3
 
@@ -70,6 +81,8 @@ Ogni partita apre due livelli distinti. Match Intelligence è sempre il primo; s
 - profili tattici e possibile copione della gara, derivati da evidenze visibili;
 - statistiche nel torneo e leader per gol, assist, tiri, passaggi o parate;
 - stato esplicito delle formazioni ufficiali;
+- Availability Desk per squadra con infortuni, squalifiche, dubbi, fuori rosa, timestamp, tier e provenienza;
+- riscontro multi-editore dichiarato come corroborazione e mai come conferma primaria;
 - News Pulse datato e filtrato sulla partita;
 - Red Flags su campione ridotto, rotazioni, nuova stagione, calendario e dati mancanti;
 - separazione visiva fra **Fatto**, **Lettura** e **Da verificare**.
@@ -86,16 +99,17 @@ La Intelligence Room viene caricata solo quando si apre una partita. La lettura 
 - Match Radar con indice trasparente 0–100;
 - Power Picks ordinati per segnale, rischio e qualità;
 - notizie aggregate con link alla fonte originale;
-- classifiche di Serie A, Premier League, LaLiga, Bundesliga e Ligue 1;
+- classifiche di 16 competizioni: top five, Serie B, Championship, Portogallo, Paesi Bassi, Turchia, Belgio, Scozia, MLS, Brasile, Argentina e Messico;
 - ricerca globale (`Ctrl/Cmd + K`);
 - preferiti e alert locali persistenti nel browser;
 - cache server con fallback sull'ultima risposta valida;
-- PWA installabile e interfaccia dedicata ad Android Chrome.
+- interfaccia responsive dedicata ad Android Chrome; nessuna modalità offline o service worker.
 
 ## Fonti gratuite
 
-- **ESPN public feeds**: calendario, risultati, classifiche, summary dell'evento, aggregato, venue, statistiche tecniche, calendari squadra, leader e lineup.
-- **Google News RSS**: soli titoli datati e link agli editori per il News Pulse della singola partita.
+- **ESPN public feeds**: calendario, risultati, classifiche, summary dell'evento, aggregato, venue, statistiche tecniche, calendari squadra, leader, lineup e route injury quando pubblica record espliciti.
+- **Fantasy Premier League ufficiale**: status, news, chance dichiarata e timestamp dei giocatori della sola Premier League; il dato fantasy non viene descritto come cartella clinica.
+- **Google News RSS**: titoli datati e link agli editori per News Pulse e segnali di disponibilità, filtrati e classificati per fonte.
 - **ANSA Calcio, Football Italia, ESPN**: flusso generale delle notizie.
 
 Le fonti possono essere parziali o cambiare formato. Il backend normalizza i dati, limita i campioni a tre gare tecniche recenti per squadra e rende visibile quando un'informazione manca. Un feed infortuni vuoto **non** viene interpretato come rosa al completo; un titolo di giornale **non** viene presentato come conferma medica; una shell rosa pre-partita **non** viene chiamata formazione ufficiale.
@@ -104,11 +118,13 @@ Le fonti possono essere parziali o cambiare formato. Il backend normalizza i dat
 
 - Node.js 18+, zero dipendenze runtime;
 - `/api/analysis`: Power Model e contesto essenziale, cache 10 minuti;
-- `/api/intelligence`: calendario, tattica, copione, giocatori, news e Reliability Ledger, cache separata 10 minuti;
+- `/api/intelligence`: calendario, tattica, copione, giocatori, Availability Desk, news e Reliability Ledger, cache separata 10 minuti;
 - `/api/team-dna`: profilo squadra, split, fingerprint tecnico e ledger, cache 30 minuti;
+- `/api/health`: telemetria sicura e senza segreti su stato, freschezza, errori, latenza e copertura delle fonti;
+- disponibilità FPL cache 30 minuti, injury feed 20 minuti, rassegna availability 15 minuti;
 - snapshot tecnici recenti: massimo tre eventi per squadra, cache 30 minuti;
 - endpoint leggeri per partite, classifiche, notizie e stato servizio;
-- asset statici con versionamento cache `4.3.1`; cambio data automatico a mezzanotte nel fuso Europe/Rome.
+- asset statici con versionamento cache `4.4.0`; cambio data automatico a mezzanotte nel fuso Europe/Rome.
 
 ## Pubblicazione con URL stabile
 
@@ -132,7 +148,7 @@ npm test
 npm run audit
 ```
 
-I test verificano homepage e asset V4.3.1, tutte le viste frontend, gerarchia dossier-first, fallback trasparente, immagini mancanti, pre-season, richieste non valide, archivio globale di ieri, Deep Match Review, partite, notizie, classifiche, Power Model 2.1, Match Intelligence 1.1, Reliability Ledger e Team DNA.
+I test verificano homepage e asset V4.4.0, tutte le viste frontend, gerarchia dossier-first, fallback trasparente, Model Track Record rigorosamente pre-kickoff, Brier e riconciliazione, Source Health Center, Availability Intelligence, immagini mancanti, pre-season, richieste non valide, archivio globale di ieri, Deep Match Review, 16 classifiche, Power Model 2.1, Match Intelligence 1.2, Reliability Ledger e Team DNA. L'audit esteso contiene 107 controlli.
 
 ## Struttura
 

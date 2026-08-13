@@ -26,13 +26,13 @@ function noInvalidNumbers(value) {
 (async () => {
   const home = await request('/', 'text');
   check(home.response.status === 200, 'Homepage HTTP 200');
-  check(home.body.includes('V4.3') && home.body.includes('app.js?v=4.3.1'), 'Homepage V4.3.1 e cache key corrette');
+  check(home.body.includes('V4.4') && home.body.includes('app.js?v=4.4.0'), 'Homepage V4.4.0 e cache key corrette');
   check(home.response.headers.get('x-content-type-options') === 'nosniff', 'Header nosniff presente');
   check(home.response.headers.get('referrer-policy') === 'strict-origin-when-cross-origin', 'Referrer policy sicura presente');
 
   const [manifest, favicon, app, css, status] = await Promise.all([
-    request('/manifest.webmanifest'), request('/favicon.svg', 'text'), request('/app.js?v=4.3.1', 'text'),
-    request('/styles.css?v=4.3.1', 'text'), request('/api/status')
+    request('/manifest.webmanifest'), request('/favicon.svg', 'text'), request('/app.js?v=4.4.0', 'text'),
+    request('/styles.css?v=4.4.0', 'text'), request('/api/status')
   ]);
   check(manifest.response.status === 200 && manifest.body?.start_url === '/#dashboard' && manifest.body?.display === 'standalone', 'Manifest PWA valido');
   check(favicon.response.status === 200 && favicon.body.includes('<svg'), 'Favicon SVG valida');
@@ -40,6 +40,7 @@ function noInvalidNumbers(value) {
   check(css.response.status === 200 && css.body.includes('@media (max-width: 720px)'), 'CSS responsive servito');
   check(app.response.headers.get('cache-control')?.includes('immutable') && css.response.headers.get('cache-control')?.includes('immutable'), 'Asset versionati serviti con cache immutabile');
   check(status.response.status === 200 && status.body?.ok && status.body.timezone === 'Europe/Rome', 'Status API e timezone validi');
+  check(Array.isArray(status.body?.standingsLeagues) && status.body.standingsLeagues.length >= 12, 'Catalogo classifiche estese valido');
 
   const today = status.body.today;
   const day = new Date(`${today}T12:00:00Z`);
@@ -72,7 +73,8 @@ function noInvalidNumbers(value) {
     const probabilitySum = p?.probabilities ? p.probabilities.home + p.probabilities.draw + p.probabilities.away : 0;
     check(Math.abs(probabilitySum - 100) <= 1, `Probabilità 1-X-2 coerenti: ${match.league.id}`);
     check(noInvalidNumbers(power.body), `Power Model senza numeri invalidi: ${match.league.id}`);
-    check(intel.response.status === 200 && intel.body?.ok && i?.engine?.version === '1.1', `Match Intelligence valida: ${match.league.id}`);
+    check(intel.response.status === 200 && intel.body?.ok && i?.engine?.version === '1.2', `Match Intelligence valida: ${match.league.id}`);
+    check(Array.isArray(i?.availability?.teams) && i.availability.teams.length === 2 && Array.isArray(i.availability.sources) && Number.isFinite(i.availability.score), `Availability Intelligence valida: ${match.league.id}`);
     check(['pre', 'post'].includes(i?.deepDive?.mode) && Array.isArray(i?.deepDive?.paragraphs) && i.deepDive.paragraphs.length > 0, `Deep Analysis presente: ${match.league.id}`);
     check(Number.isFinite(i?.reliability?.overall) && Array.isArray(i?.reliability?.items) && i.reliability.items.length >= 5, `Reliability Ledger valido: ${match.league.id}`);
     check(Array.isArray(i?.critical) && i.critical.every(item => ['Fatto', 'Lettura', 'Verifica'].includes(item.type)), `Fatti/letture/verifiche separati: ${match.league.id}`);
@@ -89,7 +91,7 @@ function noInvalidNumbers(value) {
   check(dna.response.status === 200 && dna.body?.data?.engine?.name === 'VANTAGGIO Team DNA', 'Team DNA valida');
   check(Number.isFinite(dna.body?.data?.reliability?.overall), 'Affidabilità Team DNA valida');
 
-  const standingsLeagues = ['ita.1', 'eng.1', 'esp.1', 'ger.1', 'fra.1'];
+  const standingsLeagues = ['ita.1', 'eng.1', 'esp.1', 'ger.1', 'fra.1', 'ita.2', 'por.1', 'ned.1'];
   const tables = await Promise.all(standingsLeagues.map(league => request(`/api/standings?league=${league}`)));
   tables.forEach((table, index) => {
     const rows = table.body?.data?.table || [];
@@ -103,6 +105,11 @@ function noInvalidNumbers(value) {
   check(news.response.status === 200 && news.body?.ok && articles.length >= 10, 'News API valida e non vuota');
   check(new Set(articles.map(article => article.link)).size === articles.length, 'Nessun link news duplicato');
   check(articles.every(article => article.title && article.source && /^https?:\/\//.test(article.link)), 'Titoli, fonti e URL news validi');
+
+  const health = await request('/api/health');
+  check(health.response.status === 200 && Array.isArray(health.body?.sources) && health.body.sources.some(source => source.calls > 0), 'Source Health Center operativo');
+  check(health.body.sources.filter(source => source.calls).every(source => Number.isFinite(source.averageLatencyMs) && source.averageLatencyMs >= 0), 'Latenza e contatori fonti validi');
+  check(typeof health.body?.rule === 'string' && health.body.rule.includes('completezza'), 'Health Center distingue salute e completezza');
 
   const missingApi = await request('/api/not-existent');
   check(missingApi.response.status === 404 && missingApi.body?.ok === false, 'Endpoint API inesistente gestito con 404');

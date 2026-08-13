@@ -13,6 +13,7 @@ function readLocalJson(key, fallback) {
 const state = {
   currentView: (location.hash || '#dashboard').slice(1),
   leagues: [],
+  standingsLeagues: [],
   today: '',
   matches: [],
   news: [],
@@ -20,6 +21,10 @@ const state = {
   analyses: {},
   intelligence: {},
   teamDna: {},
+  sourceHealth: null,
+  modelSnapshots: readLocalJson('vantaggio:modelSnapshots:v1', {}),
+  modelReconciling: false,
+  lastModelReconcileAt: 0,
   fixtureLedger: readLocalJson('vantaggio:fixtureLedger', {}),
   changeLog: readLocalJson('vantaggio:changeLog', []),
   kickoffChecks: readLocalJson('vantaggio:kickoffChecks', {}),
@@ -108,7 +113,7 @@ function formMarkup(form = '') {
 }
 
 function getLeague(id) {
-  return state.leagues.find(league => league.id === id) || { id, label: id, accent: '#c8ff52', country: '' };
+  return [...state.leagues, ...state.standingsLeagues].find(league => league.id === id) || { id, label: id, accent: '#c8ff52', country: '' };
 }
 
 function isUpcoming(match) {
@@ -166,6 +171,7 @@ async function loadInitial() {
   try {
     const status = await api('/api/status');
     state.leagues = status.leagues || [];
+    state.standingsLeagues = status.standingsLeagues || state.leagues.filter(league => !league.id.startsWith('uefa.'));
     state.today = status.today;
   } catch (error) {
     state.today = localDateKey(new Date());
@@ -173,14 +179,17 @@ async function loadInitial() {
   }
   const from = addDays(state.today, -1);
   const to = addDays(state.today, 13);
-  const [matches, news] = await Promise.allSettled([
+  const [matches, news, health] = await Promise.allSettled([
     api(`/api/matches?league=all&from=${from}&to=${to}`),
-    api('/api/news')
+    api('/api/news'),
+    api('/api/health')
   ]);
   if (matches.status === 'fulfilled') applyMatches(matches.value);
   else state.errors.matches = matches.reason.message;
   if (news.status === 'fulfilled') applyNews(news.value);
   else state.errors.news = news.reason.message;
+  if (health.status === 'fulfilled') state.sourceHealth = health.value;
+  try { state.sourceHealth = await api('/api/health'); } catch {}
   state.loading = false;
   updateSyncStatus();
   updateBadges();
@@ -237,11 +246,80 @@ function trackFixtureChanges(matches) {
   localStorage.setItem('vantaggio:fixtureLedger', JSON.stringify(state.fixtureLedger));
 }
 
+function persistModelSnapshots() {
+  localStorage.setItem('vantaggio:modelSnapshots:v1', JSON.stringify(state.modelSnapshots));
+}
+
+function archivePreKickoffModel(match, analysis) {
+  if (!match || !analysis?.probabilities || state.modelSnapshots[match.id]) return;
+  const capturedAt = new Date();
+  const kickoff = new Date(analysis.event?.date || match.date);
+  if (match.state !== 'pre' || (analysis.event?.state && analysis.event.state !== 'pre') || Number.isNaN(kickoff.getTime()) || capturedAt.getTime() >= kickoff.getTime()) return;
+  state.modelSnapshots[match.id] = {
+    eventId: match.id, capturedAt: capturedAt.toISOString(), kickoff: kickoff.toISOString(),
+    leagueId: match.league.id, leagueLabel: match.league.label,
+    home: match.home.name, away: match.away.name,
+    probabilities: { home: Number(analysis.probabilities.home), draw: Number(analysis.probabilities.draw), away: Number(analysis.probabilities.away) },
+    quality: Number(analysis.engine?.quality || 0), engine: analysis.engine?.version || analysis.engine?.name || 'Power Model',
+    topSignal: analysis.signals?.[0] ? { code: analysis.signals[0].code, label: analysis.signals[0].label, probability: analysis.signals[0].probability } : null
+  };
+  persistModelSnapshots();
+}
+
+function reconcileModelSnapshots(matches) {
+  let changed = false;
+  matches.filter(match => match.state === 'post').forEach(match => {
+    const snapshot = state.modelSnapshots[match.id];
+    if (!snapshot || snapshot.settledAt) return;
+    const homeScore = Number(match.home.score); const awayScore = Number(match.away.score);
+    if (!Number.isFinite(homeScore) || !Number.isFinite(awayScore)) return;
+    const actual = homeScore > awayScore ? 'home' : awayScore > homeScore ? 'away' : 'draw';
+    const probabilities = snapshot.probabilities;
+    const predicted = ['home', 'draw', 'away'].sort((a, b) => probabilities[b] - probabilities[a])[0];
+    const brier = ['home', 'draw', 'away'].reduce((sum, key) => sum + ((probabilities[key] / 100) - (key === actual ? 1 : 0)) ** 2, 0) / 2;
+    snapshot.result = { homeScore, awayScore, actual, predicted, hit: predicted === actual, brier: Math.round(brier * 1000) / 1000 };
+    snapshot.settledAt = new Date().toISOString();
+    changed = true;
+  });
+  if (changed) persistModelSnapshots();
+}
+
+async function reconcilePendingModels() {
+  if (state.modelReconciling || Date.now() - state.lastModelReconcileAt < 10 * 60_000) return;
+  const pending = Object.values(state.modelSnapshots).filter(item => !item.result && new Date(item.kickoff).getTime() < Date.now() - 2 * 3600_000).slice(0, 6);
+  if (!pending.length) return;
+  state.modelReconciling = true;
+  state.lastModelReconcileAt = Date.now();
+  try {
+    const settled = await Promise.allSettled(pending.map(item => api(`/api/analysis?event=${encodeURIComponent(item.eventId)}&league=${encodeURIComponent(item.leagueId)}`)));
+    const completed = settled.filter(item => item.status === 'fulfilled' && (item.value.data?.event?.state === 'post' || item.value.data?.event?.completed)).map(item => {
+      const event = item.value.data.event;
+      return { id: event.id, state: 'post', home: { score: event.home.score }, away: { score: event.away.score } };
+    });
+    if (completed.length) { reconcileModelSnapshots(completed); if (state.currentView === 'dashboard') render(); }
+  } finally { state.modelReconciling = false; }
+}
+
+function modelTrackStats() {
+  const all = Object.values(state.modelSnapshots).sort((a, b) => new Date(b.capturedAt) - new Date(a.capturedAt));
+  const settled = all.filter(item => item.result);
+  const hits = settled.filter(item => item.result.hit).length;
+  const accuracy = settled.length ? Math.round(hits / settled.length * 100) : null;
+  const averageConfidence = settled.length ? Math.round(settled.reduce((sum, item) => sum + Math.max(item.probabilities.home, item.probabilities.draw, item.probabilities.away), 0) / settled.length) : null;
+  return {
+    all, settled, pending: all.length - settled.length, hits, accuracy, averageConfidence,
+    calibrationGap: settled.length ? accuracy - averageConfidence : null,
+    brier: settled.length ? Math.round(settled.reduce((sum, item) => sum + item.result.brier, 0) / settled.length * 1000) / 1000 : null
+  };
+}
+
 function applyMatches(payload) {
   const previous = Object.fromEntries(state.matches.map(match => [match.id, match.state]));
   const incoming = payload.data?.matches || [];
   trackFixtureChanges(incoming);
   state.matches = incoming;
+  reconcileModelSnapshots(state.matches);
+  void reconcilePendingModels();
   state.coverage = payload.data?.coverage || { competitions: new Set(state.matches.map(match => match.league.id)).size, globalCalendar: false };
   state.dataMeta.matches = payload.meta || null;
   delete state.errors.matches;
@@ -281,6 +359,7 @@ async function runKickoffWatch() {
           api(`/api/intelligence?event=${encodeURIComponent(match.id)}&league=${encodeURIComponent(match.league.id)}&fresh=1`)
         ]);
         state.analyses[key] = analysisPayload.data;
+        archivePreKickoffModel(match, analysisPayload.data);
         state.intelligence[key] = intelPayload.data;
         addChange('kickoff', `Kickoff Watch · ${threshold}'`, `Dossier ricontrollato: ${match.home.name}–${match.away.name}.`, match, `${threshold}:${intelPayload.data.generatedAt}`);
         if (!previousIntel?.lineups?.official && intelPayload.data.lineups?.official) addChange('lineup', 'Formazioni ufficiali pubblicate', `Gli undici di ${match.home.name}–${match.away.name} sono disponibili nel dossier.`, match, 'official');
@@ -318,6 +397,7 @@ async function refreshAll(manual = false) {
       const status = await api('/api/status');
       state.today = status.today || romeToday;
       state.leagues = status.leagues || state.leagues;
+      state.standingsLeagues = status.standingsLeagues || state.standingsLeagues;
     } catch {
       state.today = romeToday;
     }
@@ -329,14 +409,16 @@ async function refreshAll(manual = false) {
   const suffix = manual ? '&fresh=1' : '';
   const from = addDays(state.today, -1);
   const to = addDays(state.today, 13);
-  const [matches, news] = await Promise.allSettled([
+  const [matches, news, health] = await Promise.allSettled([
     api(`/api/matches?league=all&from=${from}&to=${to}${suffix}`),
-    api(`/api/news?auto=1${manual ? '&fresh=1' : ''}`)
+    api(`/api/news?auto=1${manual ? '&fresh=1' : ''}`),
+    api('/api/health')
   ]);
   if (matches.status === 'fulfilled') applyMatches(matches.value);
   else state.errors.matches = matches.reason.message;
   if (news.status === 'fulfilled') applyNews(news.value);
   else state.errors.news = news.reason.message;
+  if (health.status === 'fulfilled') state.sourceHealth = health.value;
   state.refreshing = false;
   $('#refreshButton')?.classList.remove('spinning');
   updateSyncStatus();
@@ -451,6 +533,7 @@ async function loadPowerPicks() {
     if (state.analyses[key]) return Promise.resolve({ match, analysis: state.analyses[key] });
     return api(`/api/analysis?event=${encodeURIComponent(match.id)}&league=${encodeURIComponent(match.league.id)}`).then(payload => {
       state.analyses[key] = payload.data;
+      archivePreKickoffModel(match, payload.data);
       return { match, analysis: payload.data };
     });
   }));
@@ -490,6 +573,19 @@ function kickoffWatchItem(match) {
   return `<button class="kickoff-watch-item ${armed ? 'armed' : ''}" data-match="${escapeHtml(match.id)}"><span>${teamLogo(match.home, 'kickoff-logo')}${teamLogo(match.away, 'kickoff-logo')}</span><div><strong>${escapeHtml(match.home.name)} — ${escapeHtml(match.away.name)}</strong><small>${escapeHtml(displayDate(match.date))} · ${escapeHtml(fmtTime.format(new Date(match.date)))}</small></div><b>${armed ? `T-${minutes}'` : countdownText(match)}</b></button>`;
 }
 
+function renderTrackRecord() {
+  const stats = modelTrackStats();
+  const recent = stats.settled.slice(0, 3);
+  return `<article class="track-record"><header><div><span class="section-code">MODEL TRACK RECORD</span><h2>Pronostici congelati prima del via</h2></div><span class="track-lock">${icon('shield')} SOLO PRE-KICKOFF</span></header><div class="track-metrics"><div><strong>${stats.settled.length}</strong><span>verificati</span></div><div><strong>${stats.accuracy == null ? '–' : `${stats.accuracy}%`}</strong><span>esito 1-X-2</span></div><div><strong>${stats.brier == null ? '–' : stats.brier.toFixed(3)}</strong><span>Brier norm. · 0 meglio</span></div><div><strong>${stats.pending}</strong><span>in attesa</span></div></div><div class="track-results">${recent.length ? recent.map(item => `<div class="track-result ${item.result.hit ? 'hit' : 'miss'}"><span>${item.result.hit ? 'HIT' : 'MISS'}</span><strong>${escapeHtml(item.home)} ${item.result.homeScore}–${item.result.awayScore} ${escapeHtml(item.away)}</strong><small>${escapeHtml(item.result.predicted === 'home' ? item.home : item.result.predicted === 'away' ? item.away : 'Pareggio')} · Brier ${item.result.brier.toFixed(3)}</small></div>`).join('') : `<div class="specialty-empty compact">${icon('shield')}<div><strong>Archivio pronto</strong><p>La prima lettura vista prima del kickoff viene resa immutabile e valutata solo dopo il finale. Nessun backfill retroattivo.</p></div></div>`}</div><p class="desk-method">${stats.settled.length ? `Calibrazione: fiducia media ${stats.averageConfidence}%, accuratezza ${stats.accuracy}%, gap ${stats.calibrationGap > 0 ? '+' : ''}${stats.calibrationGap} punti. ` : ''}Archivio locale a questo browser: trasparente, gratuito e non condiviso tra dispositivi.</p></article>`;
+}
+
+function renderSourceHealth() {
+  const snapshot = state.sourceHealth;
+  const active = (snapshot?.sources || []).filter(source => source.calls).slice(0, 5);
+  const healthy = active.filter(source => source.state === 'operativa' || source.state === 'operativa_con_errori').length;
+  return `<article class="source-health"><header><div><span class="section-code">SOURCE HEALTH CENTER</span><h2>Fonti, freschezza e latenza</h2></div><span class="health-total"><i></i>${active.length ? `${healthy}/${active.length} operative` : 'telemetria in avvio'}</span></header><div class="source-health-list">${active.length ? active.map(source => `<div class="source-health-row"><span class="health-dot ${escapeHtml(source.state)}"></span><div><strong>${escapeHtml(source.label)}</strong><small>${escapeHtml(source.coverage || 'Copertura tecnica osservata')}</small><small>${source.lastSuccessAt ? `risposta ${escapeHtml(relativeTime(source.lastSuccessAt))}` : 'nessuna risposta valida'} · ${source.successes}/${source.calls} valide${source.failures ? ` · ${source.failures} errori` : ''}</small></div><b>${source.averageLatencyMs == null ? '–' : `${source.averageLatencyMs} ms`}</b></div>`).join('') : `<div class="specialty-empty compact">${icon('radar')}<div><strong>Misurazione in corso</strong><p>Il pannello si popola con le chiamate reali del server, senza esporre credenziali o URL sensibili.</p></div></div>`}</div><p class="desk-method">${escapeHtml(snapshot?.rule || 'Lo stato tecnico non equivale alla completezza editoriale della fonte.')}</p></article>`;
+}
+
 function renderDashboard() {
   const upcoming = filteredDashboardMatches();
   const radar = radarMatches(6);
@@ -520,6 +616,7 @@ function renderDashboard() {
       <article class="change-desk"><header><div><span class="section-code">WHAT CHANGED DESK</span><h2>Cosa è cambiato dall’ultima visita</h2></div>${unreadChanges ? `<button data-read-changes>Segna letti <b>${unreadChanges}</b></button>` : '<span class="desk-clear">Tutto letto</span>'}</header><div>${recentChanges.length ? recentChanges.map(changeDeskItem).join('') : `<div class="specialty-empty">${icon('shield')}<div><strong>Baseline attiva</strong><p>Da questo momento confronterò orari, sedi, stati, punteggi, formazioni e nuovi eventi con la visita precedente.</p></div></div>`}</div></article>
       <article class="kickoff-watch"><header><div><span class="section-code">KICKOFF WATCH</span><h2>Controllo 60' · 30' · 10'</h2></div><span class="watch-status"><i></i>${state.alertsEnabled ? 'ALERT ON' : 'MONITOR'}</span></header><p class="kickoff-intro">Le partite salvate vengono ricontrollate vicino al calcio d’inizio: dossier, news e formazioni senza chiamate continue.</p><div>${watchedKickoffs.length ? watchedKickoffs.map(kickoffWatchItem).join('') : `<div class="specialty-empty compact">${icon('star')}<div><strong>Nessuna partita sorvegliata</strong><p>Salva una partita: entrerà automaticamente nel Kickoff Watch.</p></div></div>`}</div></article>
     </section>
+    <section class="operations-deck">${renderTrackRecord()}${renderSourceHealth()}</section>
     <div class="dashboard-grid editorial-dashboard-grid">
       <section class="section-card matches-card command-card">
         <header class="section-head"><div><span class="section-code">MATCHDAY CONTROL</span><h2>Oggi sul campo</h2><p>${todayItems.length} partite oggi · poi i prossimi appuntamenti</p></div><button class="section-link" data-view="matches">Apri regia ${icon('chevron')}</button></header>
@@ -682,7 +779,7 @@ function renderNewsView() {
 
 function renderStandingsView() {
   const data = state.tables[state.standingsLeague];
-  const options = state.leagues.filter(league => !league.id.startsWith('uefa.')).map(league => `<option value="${league.id}" ${state.standingsLeague === league.id ? 'selected' : ''}>${escapeHtml(league.label)}</option>`).join('');
+  const options = (state.standingsLeagues.length ? state.standingsLeagues : state.leagues.filter(league => !league.id.startsWith('uefa.'))).map(league => `<option value="${league.id}" ${state.standingsLeague === league.id ? 'selected' : ''}>${escapeHtml(league.label)}</option>`).join('');
   const actions = `<select class="select-control" id="standingsLeagueSelect" aria-label="Scegli classifica">${options}</select>`;
   let content;
   if (!data && state.errors.standings) content = errorBlock(state.errors.standings);
@@ -840,12 +937,14 @@ async function loadAnalysis(match, force = false) {
   const root = $('#advancedAnalysis');
   if (!root) return;
   if (state.analyses[key] && !force) {
+    archivePreKickoffModel(match, state.analyses[key]);
     root.innerHTML = renderPowerAnalysis(state.analyses[key]);
     return;
   }
   try {
     const payload = await api(`/api/analysis?event=${encodeURIComponent(match.id)}&league=${encodeURIComponent(match.league.id)}${force ? '&fresh=1' : ''}`);
     state.analyses[key] = payload.data;
+    archivePreKickoffModel(match, payload.data);
     if ($('#matchModal')?.dataset.eventId === match.id && $('#advancedAnalysis')) $('#advancedAnalysis').innerHTML = renderPowerAnalysis(payload.data);
     const intelRoot = $('#matchIntelligence');
     if ($('#matchModal')?.dataset.eventId === match.id && intelRoot?.dataset.fallback === '1') intelRoot.innerHTML = renderFallbackDeepAnalysis(match, payload.data, intelRoot.dataset.error || 'Riepilogo completo non disponibile');
@@ -944,8 +1043,15 @@ function leaderIntelCard(block) {
   return `<article class="leader-intel-card"><header>${teamLogo({ name: block.teamName, logo: block.logo, abbreviation: block.teamName.slice(0, 3) }, 'intel-team-logo')}<strong>${escapeHtml(block.teamName)}</strong></header>${categories.map(category => { const player = category.players[0]; return `<div class="leader-row"><span>${escapeHtml(labels[category.id] || category.label)}</span><div><strong>${escapeHtml(player.name)}</strong><small>${escapeHtml(player.position)} ${player.jersey ? `· #${escapeHtml(player.jersey)}` : ''}</small></div><b>${escapeHtml(player.value)}</b></div>`; }).join('')}</article>`;
 }
 
+function availabilityDesk(availability) {
+  if (!availability?.teams) return `<div class="availability-state">${icon('shield')}<div><strong>Availability Intelligence non disponibile</strong><p>Lo stato della rosa resta sconosciuto: il silenzio non viene interpretato come piena disponibilità.</p></div></div>`;
+  const sourceState = value => ({ disponibile: 'disponibile', in_attesa: 'in attesa', non_applicabile: 'non applicabile', nessun_record_pubblicato: 'feed vuoto · non conclusivo', non_disponibile: 'non disponibile', nessun_segnale: 'nessun segnale' })[value] || value.replaceAll('_', ' ');
+  const teams = availability.teams.map(team => `<article class="availability-team"><header><div><span>${escapeHtml(team.teamName)}</span><strong>${team.structured.length} registrati · ${(team.signals || []).length} segnali${team.lineupOverrides?.length ? ` · ${team.lineupOverrides.length} superati dall’XI` : ''}</strong></div></header><div class="availability-players">${team.structured.length ? team.structured.map(item => `<div class="availability-player"><span class="availability-kind ${escapeHtml(item.category)}">${escapeHtml(item.category)}</span><div><strong>${escapeHtml(item.player)}</strong><p>${escapeHtml(item.detail)}</p><small>${escapeHtml(item.source)} · livello ${item.tier}${item.updatedAt ? ` · ${escapeHtml(displayNewsDate(item.updatedAt))}` : ''}${item.chance != null ? ` · chance dataset ${item.chance}%` : ''}</small></div></div>`).join('') : `<p class="availability-unknown">Nessun record strutturato pubblicato per questa squadra. Non significa rosa al completo.</p>`}</div>${(team.signals || []).length ? `<div class="availability-signals">${team.signals.slice(0, 3).map(item => `<button data-news-url="${escapeHtml(safeUrl(item.link))}"><span>${item.corroboratedBy ? `RISCONTRO · ${item.corroboratedBy + 1} EDITORI` : item.reliability === 'forte' ? 'FONTE FORTE' : item.reliability === 'media' ? 'FONTE NOTA' : 'DA VERIFICARE'}</span><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml(item.publisher)} · ${escapeHtml(displayNewsDate(item.published))}</small></button>`).join('')}</div>` : ''}</article>`).join('');
+  return `<section class="availability-desk"><header><div><span>AVAILABILITY INTELLIGENCE</span><h4>Infortuni, squalifiche, dubbi e stato lineup</h4><p>${escapeHtml(availability.message)}</p></div><b>${availability.score}/100 · ${escapeHtml(availability.level)}</b></header><div class="availability-teams">${teams}</div><div class="availability-sources">${(availability.sources || []).map(source => `<span><i class="tier-${source.tier}">T${source.tier}</i><strong>${escapeHtml(source.label)}</strong><small>${escapeHtml(sourceState(source.state))}${source.updatedAt ? ` · ${escapeHtml(relativeTime(source.updatedAt))}` : ''}</small></span>`).join('')}</div><footer>${icon('shield')}<span>${escapeHtml(availability.rule)}</span></footer></section>`;
+}
+
 function lineupIntel(data, availability) {
-  const availabilityBox = `<div class="availability-state">${icon('shield')}<div><strong>Assenze confermate: dato non disponibile</strong><p>${escapeHtml(availability?.message || 'Verifica le fonti ufficiali vicino al calcio d’inizio.')}</p></div></div>`;
+  const availabilityBox = availabilityDesk(availability);
   if (!data.official) return `<div class="lineup-pending">${icon('clock')}<div><strong>Formazioni non ancora ufficiali</strong><p>${escapeHtml(data.message)}</p><span>Questo è un punto da verificare, non un dato da indovinare.</span></div></div>${availabilityBox}`;
   return `<div class="official-lineups">${data.teams.map(team => `<article><header><strong>${escapeHtml(team.teamName)}</strong><span>${escapeHtml(team.formation || 'Modulo n/d')}</span></header><div>${team.starters.map(player => `<p><b>${escapeHtml(player.jersey || '–')}</b><span>${escapeHtml(player.name)}</span><small>${escapeHtml(player.position)}</small></p>`).join('')}</div></article>`).join('')}</div>${availabilityBox}`;
 }
@@ -958,6 +1064,12 @@ function deepTeamCase(block) {
 function deepDiveMarkup(deep) {
   if (!deep) return '';
   return `<section class="deep-dive ${deep.mode}"><header><div><span>${escapeHtml(deep.label)}</span><h3>${escapeHtml(deep.title)}</h3><p>${escapeHtml(deep.dek)}</p></div><b>${deep.mode === 'post' ? 'REVIEW' : 'PREVIEW'}</b></header><div class="deep-number-grid">${(deep.keyNumbers || []).map(item => `<article><span>${escapeHtml(item.label)}</span><strong>${escapeHtml(item.value)}</strong><small>${escapeHtml(item.note)}</small></article>`).join('')}</div><div class="deep-story">${(deep.paragraphs || []).map(item => `<article class="${item.type.toLowerCase()}"><span>${escapeHtml(item.type)}</span><div><h4>${escapeHtml(item.title)}</h4><p>${escapeHtml(item.text)}</p></div></article>`).join('')}</div><div class="deep-team-grid">${(deep.teamCases || []).map(deepTeamCase).join('')}</div>${(deep.keyMoments || []).length ? `<section class="deep-moments"><span>MOMENTI DECISIVI</span><div>${deep.keyMoments.map(moment => `<article><b>${escapeHtml(moment.minute)}</b><strong>${escapeHtml(moment.player || moment.teamName)}</strong><small>${escapeHtml(moment.label)}</small></article>`).join('')}</div></section>` : ''}${deep.marketSnapshot ? `<section class="deep-market"><header><span>MARKET SNAPSHOT</span><strong>${escapeHtml(deep.marketSnapshot.provider)}</strong></header><div>${deep.marketSnapshot.prices.map(price => `<article><span>${escapeHtml(price.label)}</span><b>${price.decimal.toFixed(2)}</b></article>`).join('')}${deep.marketSnapshot.totalLine != null ? `<article><span>Linea gol</span><b>${deep.marketSnapshot.totalLine}</b></article>` : ''}</div><p>${escapeHtml(deep.marketSnapshot.note)}</p></section>` : ''}<div class="deep-bottom"><article><span>${deep.mode === 'post' ? 'LETTURA RESPONSABILE' : 'COSA MONITORARE'}</span>${(deep.watchlist || []).map(text => `<p>${icon('radar')}<span>${escapeHtml(text)}</span></p>`).join('') || '<p>Nessun avviso aggiuntivo.</p>'}</article><article class="deep-missing"><span>DATI NON DISPONIBILI</span>${(deep.unavailable || []).map(text => `<p>${icon('info')}<span>${escapeHtml(text)}</span></p>`).join('')}</article></div><footer>${icon('shield')}<span>${escapeHtml(deep.sourceNote)}</span></footer></section>`;
+}
+
+function matchChangeHistory(eventId) {
+  const history = state.changeLog.filter(item => item.eventId === String(eventId)).sort((a, b) => new Date(b.happenedAt) - new Date(a.happenedAt));
+  if (!history.length) return `<div class="intel-empty">Nessuna variazione osservata in questo browser. La baseline è attiva per orario, sede, stato, score, lineups e news.</div>`;
+  return `<div class="match-history">${history.map(item => `<article><span class="change-icon">${icon(changeIcon(item.kind))}</span><div><strong>${escapeHtml(item.title)}</strong><p>${escapeHtml(item.text)}</p><small>${escapeHtml(displayNewsDate(item.happenedAt))} · ${escapeHtml(fmtTime.format(new Date(item.happenedAt)))}</small></div></article>`).join('')}</div>`;
 }
 
 function renderIntelligence(data) {
@@ -983,7 +1095,8 @@ function renderIntelligence(data) {
     <details class="intel-details"><summary><div><span>02</span><strong>Calendario, formazioni e disponibilità</strong></div>${icon('chevron')}</summary><div class="calendar-intel-grid">${calendarIntelCard(data.calendar.home, home)}${calendarIntelCard(data.calendar.away, away)}</div>${lineupIntel(data.lineups, data.availability)}</details>
     <details class="intel-details"><summary><div><span>03</span><strong>Numeri e giocatori nel torneo</strong></div>${icon('chevron')}</summary>${tournamentMarkup}<div class="leaders-intel-grid">${(data.leaders || []).map(leaderIntelCard).join('') || '<div class="intel-empty">Leader del torneo non disponibili nel feed.</div>'}</div></details>
     <details class="intel-details"><summary><div><span>04</span><strong>News collegate e fonti</strong></div>${icon('chevron')}</summary><div class="intel-news-grid">${newsMarkup}</div><p class="news-disclaimer">${escapeHtml(data.news?.disclaimer || '')}</p></details>
-    <details class="intel-details reliability-details"><summary><div><span>05</span><strong>Data Reliability Ledger</strong></div>${icon('chevron')}</summary>${reliabilityLedgerMarkup(data.reliability, true)}</details>
+    <details class="intel-details"><summary><div><span>05</span><strong>What Changed · storia della partita</strong></div>${icon('chevron')}</summary>${matchChangeHistory(data.event.id)}</details>
+    <details class="intel-details reliability-details"><summary><div><span>06</span><strong>Data Reliability Ledger</strong></div>${icon('chevron')}</summary>${reliabilityLedgerMarkup(data.reliability, true)}</details>
     <div class="intel-method">${icon('shield')}<span>${escapeHtml(data.methodology)}</span></div>
   </section>`;
 }
@@ -992,7 +1105,7 @@ function openInfo() {
   const modal = $('#matchModal');
   delete modal.dataset.eventId;
   modal.style.removeProperty('--league-color');
-  modal.innerHTML = `<button class="modal-close" data-close-modal aria-label="Chiudi">${icon('x')}</button><header class="modal-hero"><span class="modal-competition"><i></i>TRASPARENZA</span><div style="position:relative;z-index:1;margin-top:24px"><h2 style="margin:0 0 8px;font-size:26px">Dati gratuiti, metodo chiaro.</h2><p style="margin:0;color:rgba(255,255,255,.65);font-size:11px;line-height:1.5">Nessun abbonamento e nessuna chiave API a pagamento.</p></div></header><div class="modal-body"><section class="analysis-box"><div class="analysis-box-head"><span>Fonti attive</span><strong>Feed pubblici</strong></div><p>Partite, contesto del torneo, statistiche tecniche, calendari e classifiche: feed pubblico ESPN. News Pulse: Google News, usato solo per titoli datati e collegamenti alle fonti. ANSA Calcio e Football Italia alimentano la sezione notizie.</p></section><section class="form-comparison"><h3>Come si aggiorna</h3><p style="color:var(--muted);font-size:10px;line-height:1.6">Le partite vengono ricontrollate ogni 90 secondi mentre il sito è aperto; le notizie ogni pochi minuti. A mezzanotte il calendario avanza automaticamente sul nuovo giorno nel fuso Europe/Rome. In caso di errore temporaneo, viene mantenuta l’ultima risposta valida in cache.</p><h3 style="margin-top:18px">Power Model 2.1 + Match Intelligence</h3><p style="color:var(--muted);font-size:10px;line-height:1.6">Il Power Model combina distribuzione di Poisson, forma, precedenti, fattore campo e consenso di mercato senza margine quando presente. Match Intelligence aggiunge fase e aggregato, riposo, carico gare, campioni tecnici recenti, giocatori chiave, formazioni ufficiali e news pertinenti. Ogni elemento è marcato come fatto, lettura derivata o dato da verificare. Nessun esito è garantito.</p><h3 style="margin-top:18px">Specialità V4.1</h3><p style="color:var(--muted);font-size:10px;line-height:1.6">What Changed confronta localmente visite e refresh; Kickoff Watch ricontrolla le partite salvate a 60, 30 e 10 minuti; Team DNA costruisce un profilo trasparente su risultati e boxscore disponibili; Deep Research Brief crea analisi editoriali pre-partita e Deep Match Review usa i dati effettivi delle gare concluse; Reliability Ledger misura copertura e solidità delle fonti, non la certezza dell’esito.</p></section><div class="modal-note">${icon('shield')}<span>Preferiti, tema e alert sono salvati localmente nel browser. Il sito non richiede account e non invia dati personali.</span></div><div class="modal-actions"><button class="button primary" data-close-modal>Ho capito</button></div></div>`;
+  modal.innerHTML = `<button class="modal-close" data-close-modal aria-label="Chiudi">${icon('x')}</button><header class="modal-hero"><span class="modal-competition"><i></i>TRASPARENZA</span><div style="position:relative;z-index:1;margin-top:24px"><h2 style="margin:0 0 8px;font-size:26px">Dati gratuiti, metodo chiaro.</h2><p style="margin:0;color:rgba(255,255,255,.65);font-size:11px;line-height:1.5">Nessun abbonamento e nessuna chiave API a pagamento.</p></div></header><div class="modal-body"><section class="analysis-box"><div class="analysis-box-head"><span>Fonti attive</span><strong>Feed pubblici</strong></div><p>Partite, contesto, statistiche, calendari, classifiche, lineup e injury route: feed pubblici ESPN. Fantasy Premier League ufficiale aggiunge status e aggiornamenti per la sola Premier League. Google News fornisce titoli datati e link; ANSA, Football Italia ed ESPN alimentano la Newsroom.</p></section><section class="form-comparison"><h3>Come si aggiorna</h3><p style="color:var(--muted);font-size:10px;line-height:1.6">Le partite vengono ricontrollate ogni 90 secondi mentre il sito è aperto; le notizie ogni pochi minuti. A mezzanotte il calendario avanza automaticamente sul nuovo giorno nel fuso Europe/Rome. In caso di errore temporaneo, viene mantenuta l’ultima risposta valida in cache.</p><h3 style="margin-top:18px">Power Model 2.1 + Match Intelligence</h3><p style="color:var(--muted);font-size:10px;line-height:1.6">Il Power Model combina distribuzione di Poisson, forma, precedenti, fattore campo e consenso di mercato senza margine quando presente. Match Intelligence aggiunge fase e aggregato, riposo, carico gare, campioni tecnici recenti, giocatori chiave, formazioni ufficiali e news pertinenti. Ogni elemento è marcato come fatto, lettura derivata o dato da verificare. Nessun esito è garantito.</p><h3 style="margin-top:18px">Trasparenza V4.4</h3><p style="color:var(--muted);font-size:10px;line-height:1.6">Model Track Record congela solo letture pre-kickoff e misura accuratezza, Brier e calibrazione; Source Health mostra risposte, errori, latenza e copertura; Availability Intelligence ordina lineup, record strutturati e reporting datato per tier. What Changed conserva anche la cronologia della singola partita. Un feed vuoto non significa mai rosa al completo.</p></section><div class="modal-note">${icon('shield')}<span>Preferiti, tema e alert sono salvati localmente nel browser. Il sito non richiede account e non invia dati personali.</span></div><div class="modal-actions"><button class="button primary" data-close-modal>Ho capito</button></div></div>`;
   $('#modalLayer').hidden = false;
   document.body.style.overflow = 'hidden';
 }

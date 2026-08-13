@@ -55,11 +55,12 @@ function createNode() {
   context.globalThis = context;
 
   let source = fs.readFileSync('public/app.js', 'utf8').replace(/\ninit\(\);\s*$/, '\n');
-  source += '\nglobalThis.__test={state,safeUrl,teamLogo,newsCard,renderDashboard,renderMatchesView,renderRadarView,renderNewsView,renderStandingsView,renderFavoritesView,renderIntelligence,renderFallbackDeepAnalysis,renderPowerAnalysis};';
+  source += '\nglobalThis.__test={state,safeUrl,teamLogo,newsCard,renderDashboard,renderMatchesView,renderRadarView,renderNewsView,renderStandingsView,renderFavoritesView,renderIntelligence,renderFallbackDeepAnalysis,renderPowerAnalysis,archivePreKickoffModel,reconcileModelSnapshots,modelTrackStats};';
   vm.runInNewContext(source, context, { filename: 'public/app.js' });
   const test = context.__test;
   test.state.today = status.today;
   test.state.leagues = status.leagues;
+  test.state.standingsLeagues = status.standingsLeagues;
   test.state.matches = matchesPayload.data.matches;
   test.state.news = newsPayload.data.articles;
   test.state.coverage = matchesPayload.data.coverage || {};
@@ -94,6 +95,8 @@ function createNode() {
   }
 
   if (!renders.preDossier.includes('Analisi approfondita') || renders.preDossier.indexOf('deep-dive') > renders.preDossier.indexOf('EVIDENZE CONSULTABILI')) throw new Error('Gerarchia Deep Analysis non valida');
+  if (!renders.preDossier.includes('AVAILABILITY INTELLIGENCE') || !renders.preDossier.includes('What Changed · storia della partita')) throw new Error('Availability Desk o storia match non renderizzati');
+  if (!renders.dashboard.includes('MODEL TRACK RECORD') || !renders.dashboard.includes('SOURCE HEALTH CENTER')) throw new Error('Track Record o Source Health Center non renderizzati');
   if (!renders.postDossier.includes('REVIEW') || !renders.fallback.includes('COPERTURA RIDOTTA')) throw new Error('Review o fallback trasparente non renderizzato');
   if (!renders.matches.includes('Analisi profonda') && !renders.matches.includes('Analisi pronta') && !renders.matches.includes('Review pronta')) throw new Error('Indicatore Deep Analysis assente dalle partite');
 
@@ -116,8 +119,17 @@ function createNode() {
   if (!preseason.includes('STAGIONE NON INIZIATA') || preseason.includes('CAPOLISTA') || preseason.includes('zone-ucl')) throw new Error('La pre-season viene presentata come classifica competitiva');
   test.state.tables['ita.1'] = originalTable;
 
+  const modelMatch = { ...pre, id: 'strict-model-test', state: 'pre', date: new Date(Date.now() + 86400000).toISOString(), home: { ...pre.home, score: 0 }, away: { ...pre.away, score: 0 } };
+  test.archivePreKickoffModel(modelMatch, { ...analysisPayload.data, probabilities: { home: 55, draw: 25, away: 20 } });
+  if (!test.state.modelSnapshots[modelMatch.id] || new Date(test.state.modelSnapshots[modelMatch.id].capturedAt) >= new Date(modelMatch.date)) throw new Error('Snapshot pre-kickoff non congelato correttamente');
+  test.reconcileModelSnapshots([{ ...modelMatch, state: 'post', home: { ...modelMatch.home, score: 2 }, away: { ...modelMatch.away, score: 0 } }]);
+  const track = test.modelTrackStats();
+  if (track.settled.length !== 1 || track.accuracy !== 100 || !Number.isFinite(track.brier)) throw new Error('Riconciliazione Track Record o Brier non validi');
+  test.archivePreKickoffModel({ ...modelMatch, id: 'post-hoc-block', state: 'post' }, analysisPayload.data);
+  if (test.state.modelSnapshots['post-hoc-block']) throw new Error('Il Track Record accetta un output post-hoc');
+
   const css = fs.readFileSync('public/styles.css', 'utf8');
-  for (const marker of ['@media (max-width: 720px)', '@media (max-width: 420px)', 'prefers-reduced-motion', '.deep-dive.fallback', '.preseason-reading', '.deep-story p { margin: 0; color: var(--muted); font-size: 10.5px;']) {
+  for (const marker of ['@media (max-width: 720px)', '@media (max-width: 420px)', 'prefers-reduced-motion', '.deep-dive.fallback', '.preseason-reading', '.operations-deck', '.availability-desk', '.match-history', '.deep-story p { margin: 0; color: var(--muted); font-size: 10.5px;']) {
     if (!css.includes(marker)) throw new Error(`Regola CSS mancante: ${marker}`);
   }
   console.log('Frontend test completato: viste, dossier, URL, fallback grafici e pre-season validi.');

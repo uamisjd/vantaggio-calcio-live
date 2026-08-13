@@ -10,9 +10,9 @@ async function get(path, type = 'json') {
 
 (async () => {
   const html = await get('/', 'text');
-  if (!html.includes('VANTAGGIO') || !html.includes('V4.3') || !html.includes('/app.js?v=4.3.1') || !html.includes('/styles.css?v=4.3.1')) throw new Error('Homepage o asset V4.3.1 non validi');
-  const [appJs, styles] = await Promise.all([get('/app.js?v=4.3.1', 'text'), get('/styles.css?v=4.3.1', 'text')]);
-  const v4Modules = ['DAILY BRIEFING', 'MATCHDAY COMMAND', 'SIGNAL STUDIO', 'VANTAGGIO NEWSROOM', 'TABLE LAB', 'MY MATCHROOM', 'SCOUT SEARCH', 'WHAT CHANGED DESK', 'KICKOFF WATCH', 'TEAM DNA', 'RELIABILITY LEDGER', 'MATCH ARCHIVE'];
+  if (!html.includes('VANTAGGIO') || !html.includes('V4.4') || !html.includes('/app.js?v=4.4.0') || !html.includes('/styles.css?v=4.4.0')) throw new Error('Homepage o asset V4.4.0 non validi');
+  const [appJs, styles] = await Promise.all([get('/app.js?v=4.4.0', 'text'), get('/styles.css?v=4.4.0', 'text')]);
+  const v4Modules = ['DAILY BRIEFING', 'MATCHDAY COMMAND', 'SIGNAL STUDIO', 'VANTAGGIO NEWSROOM', 'TABLE LAB', 'MY MATCHROOM', 'SCOUT SEARCH', 'WHAT CHANGED DESK', 'KICKOFF WATCH', 'TEAM DNA', 'RELIABILITY LEDGER', 'MATCH ARCHIVE', 'MODEL TRACK RECORD', 'SOURCE HEALTH CENTER', 'AVAILABILITY INTELLIGENCE'];
   const dossierFirst = ['Analisi approfondita', 'renderFallbackDeepAnalysis', 'model-drawer', 'evidence-summary', 'COPERTURA RIDOTTA'];
   if (!v4Modules.every(module => appJs.includes(module)) || !dossierFirst.every(module => appJs.includes(module)) || !styles.includes('VANTAGGIO 4.0') || !styles.includes('.deep-dive.fallback')) throw new Error('Moduli esperienza V4.3 incompleti');
   if (appJs.includes('class="broadcast-strip"') || appJs.includes('function newsroomPreview') || appJs.includes('SIGNAL LEDGER') || styles.includes('.broadcast-strip') || styles.includes('.signal-ledger')) throw new Error('Componenti ridondanti ancora attivi');
@@ -26,7 +26,7 @@ async function get(path, type = 'json') {
   if (deepIndex < 0 || evidenceIndex < 0 || deepIndex > evidenceIndex) throw new Error('Deep Analysis non è il primo contenuto Intelligence');
 
   const status = await get('/api/status');
-  if (!status.ok || status.timezone !== 'Europe/Rome' || status.leagues.length < 5) throw new Error('Status API non valido');
+  if (!status.ok || status.timezone !== 'Europe/Rome' || status.leagues.length < 5 || !Array.isArray(status.standingsLeagues) || status.standingsLeagues.length < 12) throw new Error('Status API non valido');
 
   const from = new Date(new Date(status.today + 'T12:00:00Z').getTime() - 86400000).toISOString().slice(0, 10);
   const to = new Date(new Date(status.today + 'T12:00:00Z').getTime() + 13 * 86400000).toISOString().slice(0, 10);
@@ -38,6 +38,8 @@ async function get(path, type = 'json') {
 
   const standings = await get('/api/standings?league=ita.1');
   if (!standings.ok || !Array.isArray(standings.data.table)) throw new Error('Standings API non valida');
+  const expandedStandings = await get('/api/standings?league=por.1');
+  if (!expandedStandings.ok || expandedStandings.data.league?.id !== 'por.1' || expandedStandings.data.table.length < 16) throw new Error('Classifiche estese non valide');
 
   const analyzable = matches.data.matches.find(item => item.state !== 'post');
   if (!analyzable) throw new Error('Nessuna partita analizzabile');
@@ -48,11 +50,21 @@ async function get(path, type = 'json') {
 
   const intelligence = await get(`/api/intelligence?event=${encodeURIComponent(analyzable.id)}&league=${encodeURIComponent(analyzable.league.id)}`);
   const intel = intelligence.data;
-  if (!intelligence.ok || intel.engine?.version !== '1.1' || !intel.event || !intel.context || !intel.calendar || !intel.tactical || !intel.reliability || !intel.deepDive || !Array.isArray(intel.deepDive.paragraphs) || !intel.deepDive.paragraphs.length) throw new Error('Match Intelligence API non valida');
+  if (!intelligence.ok || intel.engine?.version !== '1.2' || !intel.event || !intel.context || !intel.calendar || !intel.tactical || !intel.reliability || !intel.deepDive || !Array.isArray(intel.deepDive.paragraphs) || !intel.deepDive.paragraphs.length) throw new Error('Match Intelligence API non valida');
   if (!Array.isArray(intel.critical) || !intel.critical.every(item => ['Fatto', 'Lettura', 'Verifica'].includes(item.type))) throw new Error('Separazione fatto/lettura/verifica non valida');
   if (!Array.isArray(intel.script) || !intel.script.length || !Array.isArray(intel.alerts) || !intel.lineups || !intel.availability || !Array.isArray(intel.news?.articles)) throw new Error('Match Intelligence incompleta');
+  if (!Number.isFinite(intel.availability.score) || !Array.isArray(intel.availability.teams) || intel.availability.teams.length !== 2 || !Array.isArray(intel.availability.sources) || !intel.availability.rule?.includes('silenzio')) throw new Error('Availability Intelligence non valida');
   if (typeof intel.tactical.home?.observedGames !== 'number' || typeof intel.tactical.away?.observedGames !== 'number') throw new Error('Campione tattico non dichiarato');
   if (!Number.isFinite(intel.reliability.overall) || !Array.isArray(intel.reliability.items) || intel.reliability.items.length < 5) throw new Error('Reliability Ledger non valido');
+
+  const premierMatch = matches.data.matches.find(item => item.league.id === 'eng.1' && item.state !== 'post');
+  let premierAvailability = null;
+  if (premierMatch) {
+    const premierIntel = await get(`/api/intelligence?event=${encodeURIComponent(premierMatch.id)}&league=eng.1`);
+    premierAvailability = premierIntel.data?.availability;
+    const fplSource = premierAvailability?.sources?.find(source => source.id === 'fpl');
+    if (!fplSource || fplSource.state !== 'disponibile' || !premierAvailability.teams?.every(team => Array.isArray(team.structured) && Array.isArray(team.signals))) throw new Error('Integrazione availability Premier League non valida');
+  }
 
   const teamDna = await get(`/api/team-dna?team=${encodeURIComponent(analyzable.home.id)}&league=${encodeURIComponent(analyzable.league.id)}&name=${encodeURIComponent(analyzable.home.name)}`);
   const dna = teamDna.data;
@@ -65,11 +77,17 @@ async function get(path, type = 'json') {
   if (review.data.deepDive?.mode !== 'post' || review.data.event.home.score !== 2 || review.data.event.away.score !== 1 || !review.data.deepDive.paragraphs?.length) throw new Error('Deep Match Review non valida');
   if (!review.data.deepDive.paragraphs.some(item => item.title === 'Season Vault') || !review.data.deepDive.teamCases.every(item => item.season?.played > 0) || !review.data.deepDive.unavailable.some(item => item.includes('xG'))) throw new Error('Season Vault o trasparenza dati incompleti');
 
-  console.log(`✓ Homepage V4.3.1 e asset cache serviti`);
+  const health = await get('/api/health');
+  if (!Array.isArray(health.sources) || !health.sources.some(source => source.calls > 0 && source.lastSuccessAt) || !health.rule) throw new Error('Source Health Center non valido');
+
+  console.log(`✓ Homepage V4.4.0 e asset cache serviti`);
   console.log(`✓ Dossier-first, fallback trasparente e componenti ridondanti rimossi`);
   console.log(`✓ ${matches.data.matches.length} partite in ${matches.data.coverage?.competitions || 0} competizioni`);
   console.log(`✓ Power Model 2.1 operativo su ${analyzable.home.name}–${analyzable.away.name}`);
   console.log(`✓ Match Intelligence: ${intel.critical.length} evidenze, ${intel.alerts.length} alert, affidabilità ${intel.reliability.overall}/100`);
+  console.log(`✓ Availability Intelligence: ${intel.availability.structuredCount} record, ${intel.availability.signalCount} segnali, copertura ${intel.availability.score}/100`);
+  if (premierAvailability) console.log(`✓ Premier League availability: FPL ufficiale, ${premierAvailability.structuredCount} status strutturati`);
+  console.log(`✓ Source Health Center: ${health.sources.filter(source => source.calls).length} fonti osservate`);
   console.log(`✓ Team DNA ${dna.team.name}: ${dna.profile.observedGames} boxscore, affidabilità ${dna.reliability.overall}/100`);
   console.log(`✓ Deep Match Review PSG–Aston Villa: 2-1, ${review.data.deepDive.paragraphs.length} blocchi editoriali verificati`);
   console.log(`✓ ${news.data.articles.length} notizie da ${news.data.sources.filter(item => item.ok).length} fonti`);

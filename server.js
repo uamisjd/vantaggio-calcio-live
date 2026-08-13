@@ -19,6 +19,21 @@ const LEAGUES = {
   'uefa.europa': { id: 'uefa.europa', label: 'Europa League', country: 'Europa', accent: '#ff9f43', weight: 20 }
 };
 
+const STANDINGS_LEAGUES = {
+  'ita.1': LEAGUES['ita.1'], 'eng.1': LEAGUES['eng.1'], 'esp.1': LEAGUES['esp.1'], 'ger.1': LEAGUES['ger.1'], 'fra.1': LEAGUES['fra.1'],
+  'ita.2': { id: 'ita.2', label: 'Serie B', country: 'Italia', accent: '#4d8ee8' },
+  'eng.2': { id: 'eng.2', label: 'Championship', country: 'Inghilterra', accent: '#9b6de3' },
+  'por.1': { id: 'por.1', label: 'Primeira Liga', country: 'Portogallo', accent: '#5bc87a' },
+  'ned.1': { id: 'ned.1', label: 'Eredivisie', country: 'Paesi Bassi', accent: '#ff8a4c' },
+  'tur.1': { id: 'tur.1', label: 'Süper Lig', country: 'Turchia', accent: '#ef5665' },
+  'bel.1': { id: 'bel.1', label: 'Pro League', country: 'Belgio', accent: '#d9a52e' },
+  'sco.1': { id: 'sco.1', label: 'Scottish Premiership', country: 'Scozia', accent: '#6b88d9' },
+  'usa.1': { id: 'usa.1', label: 'MLS', country: 'Stati Uniti', accent: '#5c9de6' },
+  'bra.1': { id: 'bra.1', label: 'Brasileirão', country: 'Brasile', accent: '#50bd68' },
+  'arg.1': { id: 'arg.1', label: 'Liga Profesional', country: 'Argentina', accent: '#6fbce9' },
+  'mex.1': { id: 'mex.1', label: 'Liga MX', country: 'Messico', accent: '#d35b76' }
+};
+
 const BIG_CLUBS = new Set([
   'internazionale', 'inter milan', 'ac milan', 'juventus', 'napoli', 'roma', 'lazio', 'atalanta',
   'manchester city', 'manchester united', 'liverpool', 'arsenal', 'chelsea', 'tottenham hotspur',
@@ -51,6 +66,47 @@ const ANALYSIS_LEAGUES = new Set([
 ]);
 
 const memoryCache = new Map();
+const sourceTelemetry = new Map();
+const SOURCE_CATALOG = {
+  'site.api.espn.com': 'ESPN Sports Feed',
+  'site.web.api.espn.com': 'ESPN Web Feed',
+  'fantasy.premierleague.com': 'Fantasy Premier League ufficiale',
+  'news.google.com': 'Google News RSS',
+  'www.ansa.it': 'ANSA Calcio',
+  'football-italia.net': 'Football Italia',
+  'www.espn.com': 'ESPN News'
+};
+const SOURCE_COVERAGE = {
+  'site.api.espn.com': 'Calendario, risultati, dossier, classifiche e injury feed',
+  'site.web.api.espn.com': 'Calendari squadra e archivio stagionale',
+  'fantasy.premierleague.com': 'Disponibilità giocatori · sola Premier League',
+  'news.google.com': 'Titoli datati e segnali disponibilità',
+  'www.ansa.it': 'News editoriali italiane',
+  'football-italia.net': 'News editoriali Serie A',
+  'www.espn.com': 'News editoriali internazionali'
+};
+
+function recordSource(url, ok, latencyMs, error = '') {
+  let host = 'fonte-sconosciuta';
+  try { host = new URL(url).hostname; } catch {}
+  const current = sourceTelemetry.get(host) || { host, label: SOURCE_CATALOG[host] || host, calls: 0, successes: 0, failures: 0, totalLatency: 0 };
+  current.calls += 1;
+  current.totalLatency += latencyMs;
+  current.lastLatencyMs = latencyMs;
+  if (ok) { current.successes += 1; current.consecutiveFailures = 0; current.lastSuccessAt = nowIso(); current.lastError = ''; }
+  else { current.failures += 1; current.consecutiveFailures = (current.consecutiveFailures || 0) + 1; current.lastErrorAt = nowIso(); current.lastError = String(error || 'Errore fonte').slice(0, 160); }
+  sourceTelemetry.set(host, current);
+}
+
+function sourceHealthSnapshot() {
+  const hosts = new Set([...Object.keys(SOURCE_CATALOG), ...sourceTelemetry.keys()]);
+  const sources = [...hosts].map(host => {
+    const item = sourceTelemetry.get(host) || { host, label: SOURCE_CATALOG[host] || host, calls: 0, successes: 0, failures: 0, totalLatency: 0 };
+    const state = !item.calls ? 'non_testata' : !item.successes || (item.consecutiveFailures || 0) >= 3 ? 'degradata' : item.failures ? 'operativa_con_errori' : 'operativa';
+    return { ...item, coverage: SOURCE_COVERAGE[host] || 'Fonte esterna osservata', state, averageLatencyMs: item.calls ? Math.round(item.totalLatency / item.calls) : null };
+  }).sort((a, b) => (b.lastSuccessAt || '').localeCompare(a.lastSuccessAt || '') || a.label.localeCompare(b.label));
+  return { ok: true, service: 'VANTAGGIO', generatedAt: nowIso(), sources, cache: { entries: memoryCache.size, staleEntries: [...memoryCache.values()].filter(item => item.stale).length }, rule: 'Lo stato misura le risposte osservate dal server gratuito; non certifica completezza editoriale o medica.' };
+}
 
 function nowIso() {
   return new Date().toISOString();
@@ -78,6 +134,7 @@ function addDays(isoDate, count) {
 async function fetchText(url, timeoutMs = 9000) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  const started = Date.now();
   try {
     const response = await fetch(url, {
       signal: controller.signal,
@@ -88,7 +145,12 @@ async function fetchText(url, timeoutMs = 9000) {
       }
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    return await response.text();
+    const text = await response.text();
+    recordSource(url, true, Date.now() - started);
+    return text;
+  } catch (error) {
+    recordSource(url, false, Date.now() - started, error.message);
+    throw error;
   } finally {
     clearTimeout(timeout);
   }
@@ -264,7 +326,7 @@ function getStat(entry, names, fallback = 0) {
 }
 
 async function getStandings(leagueId = 'ita.1', force = false) {
-  const league = LEAGUES[leagueId];
+  const league = STANDINGS_LEAGUES[leagueId];
   if (!league) throw new Error('Competizione non valida');
   return cached(`table:${league.id}`, 10 * 60_000, async () => {
     const url = `https://site.api.espn.com/apis/v2/sports/soccer/${encodeURIComponent(league.id)}/standings`;
@@ -1088,7 +1150,7 @@ function reliabilityLabel(score) {
   return score >= 82 ? 'Solida' : score >= 65 ? 'Buona' : score >= 45 ? 'Parziale' : 'Debole';
 }
 
-function buildMatchReliability(analysis, homeCalendar, awayCalendar, tactical, news) {
+function buildMatchReliability(analysis, homeCalendar, awayCalendar, tactical, news, availability = null) {
   const contextSignals = [analysis.context.phase, analysis.context.venue?.name, analysis.context.isTwoLeg ? analysis.context.aggregate : true].filter(Boolean).length;
   const contextScore = clamp(55 + contextSignals * 15, 0, 100);
   const calendarKnown = [homeCalendar.restDays, awayCalendar.restDays].filter(value => value != null).length;
@@ -1099,14 +1161,14 @@ function buildMatchReliability(analysis, homeCalendar, awayCalendar, tactical, n
   const strongNews = news.filter(item => item.reliability === 'forte').length;
   const knownNews = news.filter(item => item.reliability === 'media').length;
   const newsScore = news.length ? clamp(38 + strongNews * 18 + knownNews * 10, 38, 92) : 28;
-  const availabilityScore = 24;
+  const availabilityScore = availability?.score ?? 24;
   const items = [
     { id: 'context', label: 'Contesto competizione', score: contextScore, source: 'ESPN event summary', note: analysis.context.isTwoLeg ? 'Fase, gara e aggregato letti dal feed evento.' : 'Fase, sede e stato gara letti dal feed evento.' },
     { id: 'calendar', label: 'Riposo e calendario', score: calendarScore, source: 'ESPN team schedules', note: `${calendarKnown}/2 calendari con riposo calcolabile.` },
     { id: 'technical', label: 'DNA tecnico recente', score: technicalScore, source: 'ESPN completed boxscores', note: `${technicalGames} campioni tecnici osservati su un massimo di 6.` },
     { id: 'lineups', label: 'Formazioni', score: lineupScore, source: 'ESPN event rosters', note: analysis.lineups.official ? 'Entrambi gli undici ufficiali presenti.' : 'Undici ufficiali non ancora completi.' },
     { id: 'news', label: 'News collegate', score: newsScore, source: 'Google News RSS + editori', note: `${news.length} articoli; ${strongNews} da fonte classificata forte.` },
-    { id: 'availability', label: 'Infortuni e squalifiche', score: availabilityScore, source: 'Nessun feed primario completo', note: 'Dato non elevato a fatto senza una fonte ufficiale affidabile.' }
+    { id: 'availability', label: 'Infortuni e squalifiche', score: availabilityScore, source: availability?.sources?.filter(item => item.state === 'disponibile').map(item => item.label).join(' + ') || 'Copertura non documentata', note: availability?.message || 'Dato non elevato a fatto senza una fonte ufficiale affidabile.' }
   ].map(item => ({ ...item, level: reliabilityLabel(item.score) }));
   const weights = { context: .2, calendar: .15, technical: .25, lineups: .2, news: .1, availability: .1 };
   const overall = Math.round(items.reduce((sum, item) => sum + item.score * weights[item.id], 0));
@@ -1228,6 +1290,147 @@ async function getMatchNews(homeName, awayName) {
   }
 }
 
+function normalizeAvailabilityName(value = '') {
+  return String(value).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\b(fc|afc|cf|calcio|football club)\b/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+function sameClubName(a, b) {
+  const left = normalizeAvailabilityName(a); const right = normalizeAvailabilityName(b);
+  if (!left || !right) return false;
+  const aliases = { 'manchester united': 'man utd', 'man united': 'man utd', 'manchester city': 'man city', 'tottenham hotspur': 'tottenham', 'spurs': 'tottenham', 'brighton hove albion': 'brighton', 'wolverhampton wanderers': 'wolves', 'west ham united': 'west ham', 'nottingham forest': 'nott m forest', 'nottm forest': 'nott m forest', 'c palace': 'crystal palace' };
+  const aa = aliases[left] || left; const bb = aliases[right] || right;
+  return aa === bb || aa.includes(bb) || bb.includes(aa);
+}
+
+async function getPremierLeagueAvailability(force = false) {
+  return cached('availability:fpl:v1', 30 * 60_000, async () => {
+    const fetchedAt = nowIso();
+    const payload = await fetchJson('https://fantasy.premierleague.com/api/bootstrap-static/', 16_000);
+    const teams = new Map((payload.teams || []).map(team => [Number(team.id), team]));
+    const players = (payload.elements || []).filter(player => player.status !== 'a' || player.news).map(player => {
+      const team = teams.get(Number(player.team));
+      const text = String(player.news || 'Stato non disponibile').trim();
+      let category = 'indisponibile';
+      if (/has joined|transferr|permanent|on loan|loaned/.test(text.toLowerCase())) category = 'fuori rosa / trasferito';
+      else if (player.status === 's' || /suspend|squalif/.test(text.toLowerCase())) category = 'squalifica';
+      else if (player.status === 'd') category = 'dubbio';
+      else if (/injur|infortun|knock|hamstring|knee|ankle|groin|back|illness/.test(text.toLowerCase())) category = 'infortunio';
+      return {
+        id: String(player.id), player: player.web_name || `${player.first_name || ''} ${player.second_name || ''}`.trim(),
+        teamName: team?.name || '', teamCode: team?.short_name || '', category,
+        statusCode: player.status, chance: player.chance_of_playing_next_round,
+        detail: text, updatedAt: player.news_added || '', source: 'Fantasy Premier League ufficiale', tier: 2,
+        reliability: player.status === 'd' ? 'media' : 'forte'
+      };
+    });
+    return { available: true, fetchedAt, players };
+  }, force);
+}
+
+async function getLeagueInjuries(leagueId, force = false) {
+  return cached(`availability:espn:v1:${leagueId}`, 20 * 60_000, async () => {
+    const fetchedAt = nowIso();
+    try {
+      const payload = await fetchJson(`https://site.api.espn.com/apis/site/v2/sports/soccer/${encodeURIComponent(leagueId)}/injuries`, 12_000);
+      const groups = Array.isArray(payload.injuries) ? payload.injuries : [];
+      const players = groups.flatMap(group => {
+        const teamName = group.team?.displayName || group.team?.name || group.displayName || '';
+        const entries = group.injuries || group.items || group.athletes || [];
+        return (Array.isArray(entries) ? entries : []).map((entry, index) => ({
+          id: String(entry.id || entry.athlete?.id || `${teamName}-${index}`), teamName,
+          player: entry.athlete?.displayName || entry.athlete?.fullName || entry.displayName || entry.name || 'Giocatore',
+          category: /suspend|squalif/.test(String(entry.type?.description || entry.type || entry.status || '').toLowerCase()) ? 'squalifica' : 'indisponibile',
+          detail: entry.details?.detail || entry.details?.type || entry.shortComment || entry.description || entry.status || 'Segnalazione nel feed infortuni',
+          updatedAt: entry.date || entry.details?.returnDate || '', source: 'ESPN injury feed', tier: 2, reliability: 'forte'
+        }));
+      });
+      return { available: true, reportedCount: players.length, fetchedAt, players, emptyMeansUnknown: players.length === 0 };
+    } catch (error) {
+      return { available: false, reportedCount: 0, fetchedAt, players: [], error: error.message, emptyMeansUnknown: true };
+    }
+  }, force);
+}
+
+async function getAvailabilityNews(homeName, awayName, force = false) {
+  const query = `(${homeName} OR ${awayName}) (infortunio OR squalificato OR assente OR injury OR suspended OR fitness OR formazione) -pronostico -quote -scommesse`;
+  const url = `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=it&gl=IT&ceid=IT:it`;
+  return cached(`availability:news:v1:${normalizeAvailabilityName(homeName)}:${normalizeAvailabilityName(awayName)}`, 15 * 60_000, async () => {
+    try {
+      const cutoff = Date.now() - 21 * 86400_000;
+      return parseGoogleNews(await fetchText(url, 12_000)).filter(article => {
+        const title = article.title.toLowerCase();
+        const dated = new Date(article.published || 0).getTime();
+        const relevant = [homeName, awayName].some(name => normalizeAvailabilityName(name).split(' ').filter(token => token.length > 3).some(token => normalizeAvailabilityName(title).includes(token)));
+        return relevant && dated >= cutoff && /infortun|injur|assen|squalif|suspend|doubt|fitness|rientr|formazion|lineup/.test(title) && !/pronostic|scommess|\bquot[ae]\b|betting/.test(title);
+      }).map(article => {
+        const publisher = article.publisher.toLowerCase();
+        const teamName = [homeName, awayName].find(name => normalizeAvailabilityName(article.title).includes(normalizeAvailabilityName(name))) || '';
+        const official = [homeName, awayName].some(name => normalizeAvailabilityName(publisher).includes(normalizeAvailabilityName(name)));
+        const strong = official || /uefa|fifa|premier league|serie a|\bfa\b|reuters|associated press|\bansa\b|bbc|sky sport|espn|the athletic/.test(publisher);
+        const known = /dazn|eurosport|gazzetta|corriere dello sport|tuttosport|sportmediaset|football italia|guardian|independent/.test(publisher);
+        return { ...article, teamName, tier: official ? 1 : strong ? 3 : 4, reliability: strong ? 'forte' : known ? 'media' : 'da_verificare' };
+      }).sort((a, b) => (a.tier - b.tier) || new Date(b.published) - new Date(a.published)).slice(0, 10);
+    } catch { return []; }
+  }, force);
+}
+
+function availabilityCorroboration(articles) {
+  const stop = new Set(['della', 'delle', 'degli', 'contro', 'verso', 'formazione', 'formazioni', 'probabile', 'injury', 'infortunio', 'assente', 'squalificato', 'fitness']);
+  const tokens = article => new Set(normalizeAvailabilityName(article.title).split(' ').filter(token => token.length > 4 && !stop.has(token)));
+  return articles.map((article, index) => {
+    const own = tokens(article);
+    const publishers = new Set(articles.filter((other, otherIndex) => {
+      if (otherIndex === index || normalizeAvailabilityName(other.publisher) === normalizeAvailabilityName(article.publisher)) return false;
+      const overlap = [...own].filter(token => tokens(other).has(token)).length;
+      return overlap >= 2;
+    }).map(other => other.publisher));
+    return { ...article, corroboratedBy: publishers.size, corroboration: publishers.size ? `Ripreso da ${publishers.size + 1} editori distinti; resta da verificare alla fonte primaria.` : 'Singolo segnale editoriale.' };
+  });
+}
+
+function starterOverrides(item, lineups) {
+  if (!lineups?.official || !item.player) return false;
+  const target = normalizeAvailabilityName(item.player).replace(/\b(?:jr|sr)\b/g, '').trim();
+  return lineups.teams.some(team => sameClubName(team.teamName, item.teamName) && team.starters.some(player => {
+    const starter = normalizeAvailabilityName(player.name);
+    return starter.includes(target) || target.split(' ').some(token => token.length > 3 && starter.includes(token));
+  }));
+}
+
+function buildAvailabilityDesk(analysis, fpl, leagueInjuries, availabilityNews) {
+  const corroboratedNews = availabilityCorroboration(availabilityNews);
+  const teams = [analysis.event.home, analysis.event.away].map(team => {
+    const structured = [...(leagueInjuries?.players || []), ...(fpl?.players || [])]
+      .filter(item => sameClubName(item.teamName, team.name))
+      .map(item => starterOverrides(item, analysis.lineups) ? { ...item, overriddenByLineup: true } : item);
+    const active = structured.filter(item => !item.overriddenByLineup);
+    const signals = corroboratedNews.filter(item => !item.teamName || sameClubName(item.teamName, team.name));
+    return { teamId: team.id, teamName: team.name, structured: active, lineupOverrides: structured.filter(item => item.overriddenByLineup), signals };
+  });
+  const structuredCount = teams.reduce((sum, team) => sum + team.structured.length, 0);
+  const strongSignals = corroboratedNews.filter(item => item.reliability === 'forte').length;
+  const corroboratedSignals = corroboratedNews.filter(item => item.corroboratedBy > 0).length;
+  const hasFpl = Boolean(fpl?.available && analysis.event.leagueId === 'eng.1');
+  const hasEspnItems = Boolean(leagueInjuries?.players?.length);
+  const officialLineups = Boolean(analysis.lineups?.official);
+  const score = officialLineups
+    ? clamp(78 + (hasFpl ? 10 : 0) + (hasEspnItems ? 6 : 0) + Math.min(4, strongSignals * 2), 78, 96)
+    : clamp(24 + (hasFpl ? 42 : 0) + (hasEspnItems ? 28 : 0) + Math.min(18, strongSignals * 6 + corroboratedSignals * 3), 20, 90);
+  const status = officialLineups ? 'lineup_ufficiali' : hasFpl || hasEspnItems ? 'strutturata_parziale' : corroboratedNews.length ? 'segnali_editoriali' : 'non_documentata';
+  const sources = [
+    { id: 'lineups', label: 'Formazioni evento', tier: 1, state: officialLineups ? 'disponibile' : 'in_attesa', updatedAt: analysis.engine?.generatedAt || nowIso(), note: 'Gli undici ufficiali prevalgono su segnalazioni precedenti.' },
+    { id: 'fpl', label: 'Fantasy Premier League ufficiale', tier: 2, state: analysis.event.leagueId !== 'eng.1' ? 'non_applicabile' : hasFpl ? 'disponibile' : 'non_disponibile', updatedAt: fpl?.fetchedAt || '', note: 'Copertura Premier League; stato fantasy, non cartella clinica.' },
+    { id: 'espn-injuries', label: 'ESPN injury feed', tier: 2, state: hasEspnItems ? 'disponibile' : leagueInjuries?.available ? 'nessun_record_pubblicato' : 'non_disponibile', updatedAt: leagueInjuries?.fetchedAt || '', note: 'Un feed vuoto non prova la piena disponibilità della rosa.' },
+    { id: 'news', label: 'Rassegna disponibilità datata', tier: 3, state: corroboratedNews.length ? 'disponibile' : 'nessun_segnale', updatedAt: corroboratedNews[0]?.published || '', note: `${corroboratedNews.length} titoli pertinenti; ${corroboratedSignals} con riscontro multi-editore negli ultimi 21 giorni.` }
+  ];
+  return {
+    status, score, level: reliabilityLabel(score), generatedAt: nowIso(), teams, sources,
+    structuredCount, signalCount: corroboratedNews.length, corroboratedSignals,
+    message: officialLineups ? 'Gli undici ufficiali sono la prova più forte della disponibilità a partire; restano possibili assenze dalla panchina.' : structuredCount ? `${structuredCount} segnalazioni strutturate disponibili. Verificare gli aggiornamenti vicino al kickoff.` : corroboratedNews.length ? 'Sono presenti segnali editoriali datati, ma manca un registro strutturato completo per entrambe le rose.' : 'Nessuna evidenza sufficiente: lo stato delle rose resta sconosciuto, non “tutti disponibili”.',
+    rule: 'Gerarchia: lineup/club ufficiali → dataset ufficiali o provider espliciti → reporting forte → segnali da verificare. Il silenzio non equivale mai a piena disponibilità.'
+  };
+}
+
 function buildMatchScript(context, tactical, homeName, awayName) {
   if (context.isTwoLeg && context.leg === 2 && context.aggregate?.gap > 0) {
     const leader = context.aggregate.leaderId === tactical.home.teamId ? homeName : awayName;
@@ -1347,18 +1550,22 @@ function buildDeepDive(analysis, tactical, homeCalendar, awayCalendar, homeSeaso
 }
 
 async function getIntelligence(eventId, leagueId, force = false) {
-  return cached(`intelligence:v1:${leagueId}:${eventId}`, 10 * 60_000, async () => {
+  return cached(`intelligence:v2:${leagueId}:${eventId}`, 10 * 60_000, async () => {
     const analysisResult = await getAnalysis(eventId, leagueId, force);
     const analysis = analysisResult.value;
     const { home, away, date } = analysis.event;
     const homeRecentEvents = (analysis.recent.home.events || []).slice(-3).reverse();
     const awayRecentEvents = (analysis.recent.away.events || []).slice(-3).reverse();
+    const currentAvailability = analysis.event.state !== 'post' && !analysis.event.completed;
     const jobs = [
       getTeamScheduleIntelligence(home.id, leagueId, date),
       getTeamScheduleIntelligence(away.id, leagueId, date),
       getMatchNews(home.name, away.name),
       getTeamSeasonArchive(home.id, leagueId, date),
       getTeamSeasonArchive(away.id, leagueId, date),
+      currentAvailability && leagueId === 'eng.1' ? getPremierLeagueAvailability(force) : Promise.resolve(null),
+      currentAvailability ? getLeagueInjuries(leagueId, force) : Promise.resolve({ available: false, players: [], historical: true, emptyMeansUnknown: true }),
+      currentAvailability ? getAvailabilityNews(home.name, away.name, force) : Promise.resolve([]),
       ...homeRecentEvents.map(event => getPastMatchSnapshot(event, home.id)),
       ...awayRecentEvents.map(event => getPastMatchSnapshot(event, away.id))
     ];
@@ -1369,8 +1576,11 @@ async function getIntelligence(eventId, leagueId, force = false) {
     const news = valueAt(2) || [];
     const homeSeason = valueAt(3) || null;
     const awaySeason = valueAt(4) || null;
-    const homeSnapshots = homeRecentEvents.map((_, index) => valueAt(5 + index)).filter(Boolean);
-    const awayStart = 5 + homeRecentEvents.length;
+    const fplAvailability = valueAt(5)?.value ?? valueAt(5);
+    const leagueInjuries = valueAt(6)?.value ?? valueAt(6) ?? { available: false, players: [], emptyMeansUnknown: true };
+    const availabilityEvidence = valueAt(7)?.value ?? valueAt(7) ?? [];
+    const homeSnapshots = homeRecentEvents.map((_, index) => valueAt(8 + index)).filter(Boolean);
+    const awayStart = 8 + homeRecentEvents.length;
     const awaySnapshots = awayRecentEvents.map((_, index) => valueAt(awayStart + index)).filter(Boolean);
     const homeTactical = buildTacticalProfile(home.name, homeSnapshots, analysis.recent.home);
     const awayTactical = buildTacticalProfile(away.name, awaySnapshots, analysis.recent.away);
@@ -1392,14 +1602,16 @@ async function getIntelligence(eventId, leagueId, force = false) {
     if (analysis.assessment.seasonTransition) alerts.push({ level: 'media', title: 'Inizio stagione', text: 'Classifiche e medie stagionali hanno ancora poco peso: amichevoli e gare di qualificazione possono mescolare livelli diversi.' });
     if (homeTactical.observedGames < 2 || awayTactical.observedGames < 2 || homeTactical.observedGames + awayTactical.observedGames < 5) alerts.push({ level: 'media', title: 'Campione tecnico ridotto', text: `Le medie tecniche usano solo ${homeTactical.observedGames} gare per ${home.name} e ${awayTactical.observedGames} per ${away.name}: sono segnali, non un'identità tattica definitiva.` });
     if (!analysis.lineups.official) alerts.push({ level: 'alta', title: 'Undici non confermati', text: 'La lettura può cambiare con turnover, assenze o un attaccante lasciato fuori. Ricontrolla vicino al calcio d’inizio.' });
-    const availabilityNews = news.filter(item => ['Disponibilità', 'Formazioni'].includes(item.tag));
-    if (availabilityNews.length) alerts.push({ level: 'media', title: 'News da verificare', text: `${availabilityNews.length} titoli recenti riguardano disponibilità o formazione: apri le fonti prima di considerarli confermati.` });
+    const matchAvailabilityNews = news.filter(item => ['Disponibilità', 'Formazioni'].includes(item.tag));
+    const availability = buildAvailabilityDesk(analysis, fplAvailability, leagueInjuries, availabilityEvidence);
+    if (availability.signalCount || matchAvailabilityNews.length) alerts.push({ level: 'media', title: 'Availability Watch', text: `${availability.signalCount + matchAvailabilityNews.length} segnali datati riguardano disponibilità o formazione: distingui dataset strutturati, fonte e semplici titoli.` });
+    if (availability.structuredCount) alerts.push({ level: 'alta', title: 'Assenze o dubbi registrati', text: `${availability.structuredCount} giocatori risultano segnalati nei dataset strutturati. Apri l’Availability Desk per dettaglio, timestamp e gerarchia della fonte.` });
 
     const tactical = { home: homeTactical, away: awayTactical, matchup };
-    const reliability = buildMatchReliability(analysis, homeCalendar, awayCalendar, tactical, news);
+    const reliability = buildMatchReliability(analysis, homeCalendar, awayCalendar, tactical, news, availability);
     const deepDive = buildDeepDive(analysis, tactical, homeCalendar, awayCalendar, homeSeason, awaySeason);
     return {
-      engine: { version: '1.1', name: 'VANTAGGIO Match Intelligence', generatedAt: nowIso() },
+      engine: { version: '1.2', name: 'VANTAGGIO Match Intelligence', generatedAt: nowIso() },
       event: analysis.event,
       generatedAt: nowIso(),
       context: analysis.context,
@@ -1411,17 +1623,12 @@ async function getIntelligence(eventId, leagueId, force = false) {
       tournamentStats: analysis.tournamentStats,
       leaders: analysis.leaders,
       lineups: analysis.lineups,
-      availability: {
-        status: 'non_confermata',
-        confirmedAbsences: [],
-        newsSignals: availabilityNews.length,
-        message: 'Il feed gratuito non offre un elenco affidabile e completo di infortuni o squalifiche per questa gara. Nessuna assenza viene inventata: verifica comunicati ufficiali e formazione.'
-      },
+      availability,
       reliability,
-      news: { articles: news.slice(0, 8), availabilitySignals: availabilityNews.length, disclaimer: 'I titoli sono segnali informativi, non conferme mediche o ufficiali: verifica sempre la fonte originale.' },
+      news: { articles: news.slice(0, 8), availabilitySignals: availability.signalCount + matchAvailabilityNews.length, disclaimer: 'I titoli sono segnali informativi, non conferme mediche o ufficiali: verifica sempre la fonte originale.' },
       alerts,
       keyQuestion: analysis.context.keyQuestion,
-      methodology: 'Context Engine: distingue dati del feed, letture derivate e punti da verificare. Integra stato della sfida, calendario, riposo, prestazioni tecniche recenti, giocatori e notizie collegate.'
+      methodology: 'Context Engine: distingue dati del feed, letture derivate e punti da verificare. Availability Intelligence ordina lineup ufficiali, dataset espliciti e reporting datato senza trasformare silenzi o feed vuoti in piena disponibilità.'
     };
   }, force);
 }
@@ -1484,6 +1691,7 @@ const server = http.createServer(async (req, res) => {
   const pathname = requestUrl.pathname;
   if (pathname.startsWith('/api/')) {
     try {
+      if (pathname === '/api/health') return jsonResponse(res, 200, sourceHealthSnapshot());
       if (pathname === '/api/status') {
         return jsonResponse(res, 200, {
           ok: true,
@@ -1491,7 +1699,8 @@ const server = http.createServer(async (req, res) => {
           time: nowIso(),
           today: romeDate(),
           timezone: 'Europe/Rome',
-          leagues: Object.values(LEAGUES)
+          leagues: Object.values(LEAGUES),
+          standingsLeagues: Object.values(STANDINGS_LEAGUES)
         });
       }
       if (pathname === '/api/matches') {
@@ -1513,7 +1722,7 @@ const server = http.createServer(async (req, res) => {
       }
       if (pathname === '/api/standings') {
         const leagueId = requestUrl.searchParams.get('league') || 'ita.1';
-        if (!LEAGUES[leagueId]) return jsonResponse(res, 400, { ok: false, error: 'Competizione non valida' });
+        if (!STANDINGS_LEAGUES[leagueId]) return jsonResponse(res, 400, { ok: false, error: 'Competizione non valida' });
         const force = requestUrl.searchParams.get('fresh') === '1';
         const result = await getStandings(leagueId, force);
         return jsonResponse(res, 200, { ok: true, data: result.value, meta: { fetchedAt: result.fetchedAt, stale: result.stale } });
