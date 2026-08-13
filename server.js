@@ -575,6 +575,141 @@ function buildSignals(probabilities, goals, homeName, awayName) {
     .slice(0, 4);
 }
 
+function italianCompetitionPhase(value) {
+  if (!value) return null;
+  return String(value)
+    .replace(/UEFA Europa League Qualifying/gi, 'Qualificazioni Europa League')
+    .replace(/UEFA Champions League Qualifying/gi, 'Qualificazioni Champions League')
+    .replace(/UEFA Conference League Qualifying/gi, 'Qualificazioni Conference League')
+    .replace(/Third Round/gi, 'Terzo turno')
+    .replace(/Second Round/gi, 'Secondo turno')
+    .replace(/First Round/gi, 'Primo turno')
+    .replace(/\bQuarterfinals?\b/gi, 'Quarti di finale')
+    .replace(/\bSemifinals?\b/gi, 'Semifinale')
+    .replace(/\bFinal\b/gi, 'Finale');
+}
+
+function normalizeCompetitionContext(summary, competition, homeTeam, awayTeam) {
+  const series = competition.series?.[0] || {};
+  const leg = Number(competition.leg?.value || series.leg || 0);
+  const aggregateEntries = series.competitors || [];
+  const aggregateFor = teamId => {
+    const entry = aggregateEntries.find(item => String(item.id) === String(teamId));
+    return Number(entry?.aggregateScore ?? 0);
+  };
+  const homeAggregate = aggregateFor(homeTeam.id);
+  const awayAggregate = aggregateFor(awayTeam.id);
+  const gap = Math.abs(homeAggregate - awayAggregate);
+  const leader = homeAggregate > awayAggregate ? homeTeam : awayAggregate > homeAggregate ? awayTeam : null;
+  const trailer = leader ? (leader.id === homeTeam.id ? awayTeam : homeTeam) : null;
+  const isTwoLeg = Boolean(leg || Number(series.totalCompetitions) === 2);
+  const phase = italianCompetitionPhase(competition.groups?.name || competition.altGameNote || summary.header?.season?.name || '');
+  const sourceNote = competition.notes?.[0]?.headline || '';
+  const facts = [];
+  const incentives = [];
+  let keyQuestion = `Quale squadra riuscirà a imporre il proprio ritmo senza concedere il primo episodio decisivo?`;
+  let scenario = 'Partita singola';
+  let urgency = 'normale';
+
+  if (isTwoLeg && leg === 2) {
+    scenario = 'Gara di ritorno';
+    if (leader && gap > 0) {
+      urgency = gap >= 3 ? 'estrema' : gap >= 2 ? 'alta' : 'elevata';
+      facts.push(`${leader.name} parte avanti ${leader.id === homeTeam.id ? `${homeAggregate}-${awayAggregate}` : `${awayAggregate}-${homeAggregate}`} nel punteggio aggregato.`);
+      facts.push(`${trailer.name} deve recuperare ${gap} ${gap === 1 ? 'gol' : 'gol'} per portare l’aggregato in parità.`);
+      incentives.push(`${trailer.name} non può gestire un risultato ordinario: con il passare dei minuti dovrà aumentare uomini e rischio offensivo.`);
+      incentives.push(`${leader.name} non ha necessariamente bisogno di vincere la singola partita: può privilegiare controllo, protezione centrale e transizioni.`);
+      if (gap >= 3) incentives.push(`Il margine ampio aumenta il rischio di rotazioni o di un approccio conservativo da parte di ${leader.name}.`);
+      keyQuestion = `Quanto ${leader.name} cercherà davvero la vittoria della singola gara, avendo già ${gap} gol di margine?`;
+    } else {
+      urgency = 'alta';
+      facts.push(`Il ritorno comincia con aggregato in parità: la gara vale di fatto come un’eliminazione diretta.`);
+      incentives.push(`Il primo gol avrà un peso tattico superiore al normale perché rompe l’equilibrio dell’intera sfida.`);
+      keyQuestion = `Chi gestirà meglio il rischio sapendo che il primo gol può cambiare completamente il piano partita?`;
+    }
+  } else if (isTwoLeg && leg === 1) {
+    scenario = 'Gara di andata';
+    urgency = 'controllata';
+    facts.push(`È la prima di due gare: il risultato va letto sull’arco di 180 minuti.`);
+    incentives.push(`Nessuna squadra è obbligata a risolvere subito la qualificazione; evitare un danno strutturale pesa più che in una partita di campionato.`);
+    keyQuestion = `Chi riuscirà a creare un vantaggio senza esporsi eccessivamente in vista del ritorno?`;
+  } else {
+    facts.push(`La partita è una gara singola: il risultato dei 90 minuti coincide con l’obiettivo immediato.`);
+  }
+
+  if (phase) facts.push(`Contesto competizione: ${phase}.`);
+  return {
+    scenario, phase, leg: leg || null, isTwoLeg, urgency,
+    aggregate: isTwoLeg ? { home: homeAggregate, away: awayAggregate, leaderId: leader?.id || null, gap } : null,
+    sourceNote, facts, incentives, keyQuestion,
+    venue: {
+      name: summary.gameInfo?.venue?.fullName || '',
+      city: summary.gameInfo?.venue?.address?.city || '',
+      country: summary.gameInfo?.venue?.address?.country || ''
+    }
+  };
+}
+
+function normalizeTournamentStats(summary) {
+  return (summary.boxscore?.teams || []).map(item => {
+    const stats = Object.fromEntries((item.statistics || []).map(stat => [stat.name, Number(stat.displayValue ?? stat.value ?? 0)]));
+    return {
+      teamId: String(item.team?.id || ''),
+      name: item.team?.shortDisplayName || item.team?.displayName || 'Squadra',
+      logo: item.team?.logo || '',
+      goals: stats.totalGoals ?? null,
+      conceded: stats.goalsConceded ?? null,
+      assists: stats.goalAssists ?? null,
+      goalDifference: stats.goalDifference ?? null
+    };
+  });
+}
+
+function normalizeTeamLeaders(summary) {
+  const wanted = new Set(['goalsLeaders', 'assistsLeaders', 'totalShots', 'accuratePasses', 'saves']);
+  return (summary.leaders || []).map(teamBlock => ({
+    teamId: String(teamBlock.team?.id || ''),
+    teamName: teamBlock.team?.displayName || 'Squadra',
+    logo: teamBlock.team?.logo || '',
+    categories: (teamBlock.leaders || []).filter(category => wanted.has(category.name)).map(category => ({
+      id: category.name,
+      label: category.displayName || category.name,
+      players: (category.leaders || []).slice(0, 3).map(entry => ({
+        id: String(entry.athlete?.id || ''),
+        name: entry.athlete?.displayName || 'Giocatore',
+        shortName: entry.athlete?.shortName || entry.athlete?.displayName || 'Giocatore',
+        position: entry.athlete?.position?.abbreviation || '',
+        jersey: entry.athlete?.jersey || '',
+        value: entry.shortDisplayValue || entry.displayValue || ''
+      }))
+    }))
+  }));
+}
+
+function normalizeLineups(summary) {
+  const teams = (summary.rosters || []).map(block => {
+    const players = block.roster || block.athletes || [];
+    const starters = players.filter(player => player.starter).map(player => ({
+      id: String(player.athlete?.id || player.id || ''),
+      name: player.athlete?.displayName || player.displayName || 'Giocatore',
+      shortName: player.athlete?.shortName || player.shortName || player.athlete?.displayName || '',
+      jersey: player.jersey || player.athlete?.jersey || '',
+      position: player.position?.abbreviation || player.athlete?.position?.abbreviation || ''
+    }));
+    return {
+      side: block.homeAway || '', teamId: String(block.team?.id || ''),
+      teamName: block.team?.displayName || 'Squadra', formation: block.formation || '', starters
+    };
+  });
+  const official = teams.length === 2 && teams.every(team => team.starters.length >= 11);
+  return {
+    status: official ? 'ufficiali' : 'in_attesa',
+    official,
+    message: official ? 'Formazioni ufficiali disponibili nel feed.' : 'Formazioni ufficiali non ancora pubblicate. Di norma arrivano vicino al calcio d’inizio.',
+    teams
+  };
+}
+
 async function fetchEventSummary(eventId, leagueId) {
   const primary = `https://site.api.espn.com/apis/site/v2/sports/soccer/${encodeURIComponent(leagueId)}/summary?event=${encodeURIComponent(eventId)}`;
   try {
@@ -613,6 +748,10 @@ async function getAnalysis(eventId, leagueId, force = false) {
     const h2h = normalizeH2H(summary.seasonseries?.[0] || {}, homeTeam.id, awayTeam.id);
     const standings = { home: standingFor(summary, homeTeam.id), away: standingFor(summary, awayTeam.id) };
     const market = marketModel(summary);
+    const context = normalizeCompetitionContext(summary, competition, homeTeam, awayTeam);
+    const tournamentStats = normalizeTournamentStats(summary);
+    const leaders = normalizeTeamLeaders(summary);
+    const lineups = normalizeLineups(summary);
     const model = statisticalModel(homeRecent, awayRecent);
     const consensus = market?.outcome ? {
       home: model.outcome.home * 0.58 + market.outcome.home * 0.42,
@@ -634,7 +773,11 @@ async function getAnalysis(eventId, leagueId, force = false) {
     const seasonTransition = (standings.home?.played === 0 && standings.away?.played === 0);
     return {
       event: { id: String(eventId), leagueId, date: competition.date || '', home: homeTeam, away: awayTeam },
-      engine: { version: '2.0', name: 'VANTAGGIO Power Model', generatedAt: nowIso(), quality, sampleSize: recentSamples + h2h.total },
+      context,
+      tournamentStats,
+      leaders,
+      lineups,
+      engine: { version: '2.1', name: 'VANTAGGIO Power Model', generatedAt: nowIso(), quality, sampleSize: recentSamples + h2h.total },
       probabilities,
       statisticalProbabilities: percentageTriplet(model.outcome),
       expectedGoals: model.expectedGoals,
@@ -653,6 +796,288 @@ async function getAnalysis(eventId, leagueId, force = false) {
       standings,
       market,
       methodology: 'Modello Poisson sui gol recenti, forma, precedenti e consenso di mercato quando disponibile. Le fonti possono avere ritardi o campioni incompleti.'
+    };
+  }, force);
+}
+
+function statFromTeamBlock(teamBlock, name) {
+  const item = (teamBlock?.statistics || []).find(stat => stat.name === name);
+  if (!item) return null;
+  const value = Number(String(item.displayValue ?? item.value ?? '').replace('%', ''));
+  if (!Number.isFinite(value)) return null;
+  if (['passPct', 'shotPct', 'crossPct', 'tacklePct', 'longballPct'].includes(name) && value <= 1) return value * 100;
+  return value;
+}
+
+async function getPastMatchSnapshot(event, teamId) {
+  const key = `snapshot:${event.id}:${teamId}`;
+  const result = await cached(key, 30 * 60_000, async () => {
+    const summary = await fetchJson(`https://site.api.espn.com/apis/site/v2/sports/soccer/all/summary?event=${encodeURIComponent(event.id)}`, 14_000);
+    const block = (summary.boxscore?.teams || []).find(item => String(item.team?.id) === String(teamId));
+    if (!block || !(block.statistics || []).length) return null;
+    return {
+      eventId: String(event.id), date: event.date || '', opponent: event.opponent || '',
+      result: event.result || '', score: `${event.goalsFor}-${event.goalsAgainst}`,
+      metrics: {
+        possession: statFromTeamBlock(block, 'possessionPct'),
+        shots: statFromTeamBlock(block, 'totalShots'),
+        shotsOnTarget: statFromTeamBlock(block, 'shotsOnTarget'),
+        corners: statFromTeamBlock(block, 'wonCorners'),
+        passAccuracy: statFromTeamBlock(block, 'passPct'),
+        clearances: statFromTeamBlock(block, 'totalClearance'),
+        tackles: statFromTeamBlock(block, 'totalTackles'),
+        yellowCards: statFromTeamBlock(block, 'yellowCards'),
+        redCards: statFromTeamBlock(block, 'redCards')
+      }
+    };
+  });
+  return result.value;
+}
+
+function averageMetric(snapshots, key) {
+  const values = snapshots.map(item => item?.metrics?.[key]).filter(value => Number.isFinite(value));
+  return values.length ? round1(values.reduce((sum, value) => sum + value, 0) / values.length) : null;
+}
+
+function buildTacticalProfile(teamName, snapshots, recent) {
+  const valid = snapshots.filter(Boolean);
+  const metrics = {
+    possession: averageMetric(valid, 'possession'),
+    shots: averageMetric(valid, 'shots'),
+    shotsOnTarget: averageMetric(valid, 'shotsOnTarget'),
+    corners: averageMetric(valid, 'corners'),
+    passAccuracy: averageMetric(valid, 'passAccuracy'),
+    clearances: averageMetric(valid, 'clearances'),
+    tackles: averageMetric(valid, 'tackles'),
+    yellowCards: averageMetric(valid, 'yellowCards'),
+    redCards: averageMetric(valid, 'redCards')
+  };
+  let style = 'Profilo da confermare';
+  const traits = [];
+  const vulnerabilities = [];
+  if (metrics.possession != null) {
+    if (metrics.possession >= 57) {
+      style = 'Controllo e territorio';
+      traits.push(`Nelle gare osservate tiene mediamente il ${metrics.possession}% di possesso.`);
+    } else if (metrics.possession <= 43) {
+      style = 'Verticalità e transizione';
+      traits.push(`Accetta spesso di giocare senza palla: ${metrics.possession}% di possesso medio nel campione.`);
+    } else {
+      style = 'Struttura equilibrata';
+      traits.push(`Il possesso medio (${metrics.possession}%) indica un approccio non estremo.`);
+    }
+  }
+  if (metrics.shots != null) {
+    if (metrics.shots >= 14) traits.push(`Produce un volume offensivo alto: ${metrics.shots} tiri medi.`);
+    else if (metrics.shots <= 8) vulnerabilities.push(`Volume di tiro contenuto: ${metrics.shots} conclusioni medie.`);
+  }
+  if (metrics.shotsOnTarget != null && metrics.shots != null && metrics.shots > 0) {
+    const accuracy = Math.round((metrics.shotsOnTarget / metrics.shots) * 100);
+    if (accuracy >= 42) traits.push(`Buona precisione recente: circa il ${accuracy}% dei tiri centra la porta.`);
+    if (accuracy <= 27) vulnerabilities.push(`Precisione recente bassa: solo il ${accuracy}% dei tiri centra la porta.`);
+  }
+  if (metrics.corners != null && metrics.corners >= 6) traits.push(`Pressione territoriale visibile anche nei corner: ${metrics.corners} di media.`);
+  if (metrics.clearances != null && metrics.clearances >= 25) traits.push(`È abituata a difendere l’area: ${metrics.clearances} respinte medie.`);
+  if (metrics.passAccuracy != null && metrics.passAccuracy >= 85) traits.push(`Circolazione pulita nel campione: ${metrics.passAccuracy}% di passaggi riusciti.`);
+  if (metrics.yellowCards != null && metrics.yellowCards >= 3) vulnerabilities.push(`Disciplina da monitorare: ${metrics.yellowCards} cartellini gialli medi nel campione.`);
+  if (metrics.redCards != null && metrics.redCards > 0) vulnerabilities.push(`Nel piccolo campione compare una media di ${metrics.redCards} espulsioni: dato sensibile agli episodi.`);
+  if (recent.avgGoalsAgainst != null && recent.avgGoalsAgainst >= 1.8) vulnerabilities.push(`Ha concesso ${recent.avgGoalsAgainst} gol di media nelle ultime ${recent.played}.`);
+  if (recent.failedToScore >= 2) vulnerabilities.push(`È rimasta senza segnare in ${recent.failedToScore} delle ultime ${recent.played}.`);
+  if (!valid.length) traits.push(`Il feed non offre ancora statistiche tecniche complete sulle gare recenti di ${teamName}.`);
+  return { teamName, style, observedGames: valid.length, metrics, traits: traits.slice(0, 4), vulnerabilities: vulnerabilities.slice(0, 3), snapshots: valid };
+}
+
+function buildTacticalMatchup(home, away, homeName, awayName) {
+  const readings = [];
+  const hp = home.metrics.possession;
+  const ap = away.metrics.possession;
+  if (hp != null && ap != null && Math.abs(hp - ap) >= 12) {
+    const controller = hp > ap ? homeName : awayName;
+    const reactor = hp > ap ? awayName : homeName;
+    readings.push(`${controller} mostra un profilo più orientato al possesso; ${reactor} può trovare la sua partita nelle transizioni e negli spazi alle spalle della pressione.`);
+  }
+  if ((home.metrics.shots || 0) >= 13 && (away.metrics.shots || 0) >= 13) readings.push(`Entrambe producono volume: il controllo delle seconde palle e delle transizioni può contare più del possesso sterile.`);
+  if ((home.metrics.corners || 0) >= 6 || (away.metrics.corners || 0) >= 6) {
+    const team = (home.metrics.corners || 0) >= (away.metrics.corners || 0) ? homeName : awayName;
+    readings.push(`${team} arriva con una pressione territoriale che genera molti corner: le palle inattive sono una battaglia da monitorare.`);
+  }
+  if (home.vulnerabilities.length && away.vulnerabilities.length) readings.push(`Entrambe presentano fragilità recenti: il primo errore può cambiare un piano inizialmente prudente.`);
+  if (!readings.length) readings.push(`I profili disponibili non mostrano un contrasto netto: formazione ufficiale e primi quindici minuti saranno decisivi per capire il vero assetto.`);
+  return readings.slice(0, 3);
+}
+
+async function getTeamScheduleIntelligence(teamId, leagueId, eventDate) {
+  const season = new Date(eventDate).getUTCFullYear();
+  const urls = [
+    `https://site.api.espn.com/apis/site/v2/sports/soccer/all/teams/${encodeURIComponent(teamId)}/schedule?season=${season}`,
+    `https://site.api.espn.com/apis/site/v2/sports/soccer/${encodeURIComponent(leagueId)}/teams/${encodeURIComponent(teamId)}/schedule?season=${season}`
+  ];
+  for (const url of urls) {
+    try {
+      const json = await fetchJson(url, 10_000);
+      if (json.events) return json;
+    } catch { /* prova il fallback */ }
+  }
+  return { events: [], team: {} };
+}
+
+function calendarProfile(schedule, recent, eventDate, eventId) {
+  const matchTime = new Date(eventDate).getTime();
+  const latestRecent = [...(recent.events || [])].filter(item => new Date(item.date).getTime() < matchTime).sort((a, b) => new Date(b.date) - new Date(a.date))[0];
+  const restDays = latestRecent ? Math.max(0, round1((matchTime - new Date(latestRecent.date).getTime()) / 86400000)) : null;
+  const future = (schedule.events || []).filter(item => String(item.id) !== String(eventId) && new Date(item.date).getTime() > matchTime).sort((a, b) => new Date(a.date) - new Date(b.date));
+  const next = future[0];
+  const nextDays = next ? round1((new Date(next.date).getTime() - matchTime) / 86400000) : null;
+  const matchesLast14 = (recent.events || []).filter(item => {
+    const time = new Date(item.date).getTime();
+    return time < matchTime && time >= matchTime - 14 * 86400000;
+  }).length;
+  return {
+    restDays, matchesLast14,
+    previous: latestRecent ? { date: latestRecent.date, opponent: latestRecent.opponent, score: `${latestRecent.goalsFor}-${latestRecent.goalsAgainst}`, result: latestRecent.result } : null,
+    next: next ? { id: String(next.id), date: next.date, name: next.name || next.shortName || 'Prossima partita', days: nextDays } : null,
+    standingSummary: schedule.team?.standingSummary || '', recordSummary: schedule.team?.recordSummary || ''
+  };
+}
+
+function parseGoogleNews(xml) {
+  return [...xml.matchAll(/<item(?:\s[^>]*)?>([\s\S]*?)<\/item>/gi)].map((match, index) => {
+    const block = match[1];
+    const title = stripHtml(xmlValue(block, 'title'));
+    const publisher = stripHtml(xmlValue(block, 'source')) || title.split(' - ').pop() || 'Fonte web';
+    const normalizedTitle = title.endsWith(` - ${publisher}`) ? title.slice(0, -(publisher.length + 3)) : title;
+    const lower = normalizedTitle.toLowerCase();
+    let tag = 'Approfondimento';
+    if (/infortun|injur|assen|squalif|suspend|out\b|doubt|fitness|rientr/.test(lower)) tag = 'Disponibilità';
+    else if (/formazion|lineup|starting xi|undici|probabil/.test(lower)) tag = 'Formazioni';
+    else if (/allenator|coach|manager|conferenza|press conference/.test(lower)) tag = 'Dichiarazioni';
+    else if (/preview|probabilit|pronostic|prediction|verso la/.test(lower)) tag = 'Pre-partita';
+    return {
+      id: `gnews-${index}-${Buffer.from(xmlValue(block, 'guid') || normalizedTitle).toString('base64url').slice(0, 12)}`,
+      title: normalizedTitle,
+      publisher,
+      link: stripHtml(xmlValue(block, 'link')),
+      published: xmlValue(block, 'pubDate') || '', tag
+    };
+  }).filter(item => item.title && item.link).sort((a, b) => new Date(b.published || 0) - new Date(a.published || 0)).slice(0, 12);
+}
+
+async function getMatchNews(homeName, awayName) {
+  const query = `"${homeName}" "${awayName}" -pronostico -quote -scommesse -streaming -betting`;
+  const url = `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=it&gl=IT&ceid=IT:it`;
+  try {
+    const homeTokens = homeName.toLowerCase().split(/\s+/).filter(token => token.length >= 4);
+    const awayTokens = awayName.toLowerCase().split(/\s+/).filter(token => token.length >= 4);
+    const parsed = parseGoogleNews(await fetchText(url, 12_000)).filter(article => {
+      const title = article.title.toLowerCase();
+      const commercialTip = /pronostic|\bquot[ae]\b|scommess|betting|diretta tv gratis|live streaming gratis/.test(title);
+      return !commercialTip && (!homeTokens.length || homeTokens.some(token => title.includes(token))) && (!awayTokens.length || awayTokens.some(token => title.includes(token)));
+    }).map(article => {
+      const publisher = article.publisher.toLowerCase();
+      const officialTeamSource = [...homeTokens, ...awayTokens].some(token => publisher.includes(token));
+      const strongSource = officialTeamSource || /uefa|fifa|reuters|associated press|\bansa\b|bbc|sky sport|espn|the athletic/.test(publisher);
+      const establishedSource = /fotmob|dazn|eurosport|gazzetta|corriere dello sport|tuttosport|sportmediaset|football italia|guardian|independent/.test(publisher);
+      return { ...article, reliability: strongSource ? 'forte' : establishedSource ? 'media' : 'da_verificare' };
+    });
+    const reliabilityRank = { forte: 3, media: 2, da_verificare: 1 };
+    return parsed.sort((a, b) => reliabilityRank[b.reliability] - reliabilityRank[a.reliability] || new Date(b.published || 0) - new Date(a.published || 0)).slice(0, 8);
+  } catch {
+    return [];
+  }
+}
+
+function buildMatchScript(context, tactical, homeName, awayName) {
+  if (context.isTwoLeg && context.leg === 2 && context.aggregate?.gap > 0) {
+    const leader = context.aggregate.leaderId === tactical.home.teamId ? homeName : awayName;
+    const trailer = leader === homeName ? awayName : homeName;
+    return [
+      { phase: '0’–25’', title: 'Il test dell’urgenza', text: `${trailer} deve capire quanto presto alzare pressione e numero di uomini. ${leader} può iniziare proteggendo il centro e scegliendo quando accelerare.` },
+      { phase: '25’–70’', title: 'L’aggregato detta il ritmo', text: `Se il margine non cambia, la necessità di ${trailer} cresce. Le perdite di palla possono aprire transizioni molto più importanti del possesso complessivo.` },
+      { phase: '70’–90’', title: 'Partita potenzialmente asimmetrica', text: `Il risultato della singola gara e quello della qualificazione possono raccontare due storie diverse. Rotazioni, gestione e spazi aumentano con il passare dei minuti.` }
+    ];
+  }
+  if (context.isTwoLeg && context.leg === 2) {
+    return [
+      { phase: '0’–30’', title: 'Equilibrio ad alta tensione', text: 'Con aggregato in parità, il costo del primo errore è superiore a quello di una normale gara di campionato.' },
+      { phase: '30’–70’', title: 'Il primo gol cambia tutto', text: 'Chi passa avanti può abbassare rischio e densità; chi va sotto è costretto ad allungare la partita.' },
+      { phase: '70’–90’', title: 'Gestione o assalto', text: 'Il finale dipende interamente dallo stato dell’aggregato: prudenza se pari, assalto e transizioni se una squadra insegue.' }
+    ];
+  }
+  return [
+    { phase: '0’–25’', title: 'Conquista del territorio', text: `${homeName} proverà a sfruttare campo e pubblico; il contrasto iniziale tra ${tactical.home.style.toLowerCase()} e ${tactical.away.style.toLowerCase()} chiarirà il copione.` },
+    { phase: '25’–70’', title: 'La battaglia strutturale', text: tactical.matchup[0] || 'Il controllo delle transizioni e delle seconde palle può spostare l’equilibrio.' },
+    { phase: '70’–90’', title: 'Peso della panchina', text: 'Se il risultato resta corto, qualità delle sostituzioni, stanchezza e palle inattive diventano più importanti delle medie pre-partita.' }
+  ];
+}
+
+async function getIntelligence(eventId, leagueId, force = false) {
+  return cached(`intelligence:v1:${leagueId}:${eventId}`, 10 * 60_000, async () => {
+    const analysisResult = await getAnalysis(eventId, leagueId, force);
+    const analysis = analysisResult.value;
+    const { home, away, date } = analysis.event;
+    const homeRecentEvents = (analysis.recent.home.events || []).slice(-3).reverse();
+    const awayRecentEvents = (analysis.recent.away.events || []).slice(-3).reverse();
+    const jobs = [
+      getTeamScheduleIntelligence(home.id, leagueId, date),
+      getTeamScheduleIntelligence(away.id, leagueId, date),
+      getMatchNews(home.name, away.name),
+      ...homeRecentEvents.map(event => getPastMatchSnapshot(event, home.id)),
+      ...awayRecentEvents.map(event => getPastMatchSnapshot(event, away.id))
+    ];
+    const settled = await Promise.allSettled(jobs);
+    const valueAt = index => settled[index]?.status === 'fulfilled' ? settled[index].value : null;
+    const homeSchedule = valueAt(0) || { events: [], team: {} };
+    const awaySchedule = valueAt(1) || { events: [], team: {} };
+    const news = valueAt(2) || [];
+    const homeSnapshots = homeRecentEvents.map((_, index) => valueAt(3 + index)).filter(Boolean);
+    const awayStart = 3 + homeRecentEvents.length;
+    const awaySnapshots = awayRecentEvents.map((_, index) => valueAt(awayStart + index)).filter(Boolean);
+    const homeTactical = buildTacticalProfile(home.name, homeSnapshots, analysis.recent.home);
+    const awayTactical = buildTacticalProfile(away.name, awaySnapshots, analysis.recent.away);
+    homeTactical.teamId = home.id;
+    awayTactical.teamId = away.id;
+    const matchup = buildTacticalMatchup(homeTactical, awayTactical, home.name, away.name);
+    const homeCalendar = calendarProfile(homeSchedule, analysis.recent.home, date, eventId);
+    const awayCalendar = calendarProfile(awaySchedule, analysis.recent.away, date, eventId);
+    const critical = [];
+    analysis.context.facts.forEach((text, index) => critical.push({ type: 'Fatto', level: index === 0 && analysis.context.isTwoLeg ? 'alta' : 'normale', title: index === 0 ? 'Posta in palio' : 'Contesto', text }));
+    if (homeCalendar.restDays != null) critical.push({ type: 'Fatto', level: homeCalendar.restDays <= 3 ? 'alta' : 'normale', title: `Recupero ${home.name}`, text: `${homeCalendar.restDays} giorni dall’ultima partita; ${homeCalendar.matchesLast14} gare negli ultimi 14 giorni disponibili.` });
+    if (awayCalendar.restDays != null) critical.push({ type: 'Fatto', level: awayCalendar.restDays <= 3 ? 'alta' : 'normale', title: `Recupero ${away.name}`, text: `${awayCalendar.restDays} giorni dall’ultima partita; ${awayCalendar.matchesLast14} gare negli ultimi 14 giorni disponibili.` });
+    matchup.forEach((text, index) => critical.push({ type: 'Lettura', level: index === 0 ? 'alta' : 'normale', title: index === 0 ? 'Incrocio tattico' : 'Battaglia secondaria', text }));
+    critical.push({ type: 'Verifica', level: analysis.lineups.official ? 'normale' : 'alta', title: 'Formazioni', text: analysis.lineups.message });
+
+    const alerts = [];
+    if (analysis.context.aggregate?.gap >= 3) alerts.push({ level: 'alta', title: 'Rischio motivazionale', text: 'Un largo vantaggio aggregato può rendere meno utile la probabilità di vittoria della squadra più forte nella singola gara.' });
+    if ((homeCalendar.restDays != null && homeCalendar.restDays <= 3) || (awayCalendar.restDays != null && awayCalendar.restDays <= 3)) alerts.push({ level: 'media', title: 'Recupero breve', text: 'Almeno una squadra arriva con tre giorni o meno: intensità e rotazioni vanno controllate nelle formazioni.' });
+    if (analysis.assessment.seasonTransition) alerts.push({ level: 'media', title: 'Inizio stagione', text: 'Classifiche e medie stagionali hanno ancora poco peso: amichevoli e gare di qualificazione possono mescolare livelli diversi.' });
+    if (homeTactical.observedGames < 2 || awayTactical.observedGames < 2 || homeTactical.observedGames + awayTactical.observedGames < 5) alerts.push({ level: 'media', title: 'Campione tecnico ridotto', text: `Le medie tecniche usano solo ${homeTactical.observedGames} gare per ${home.name} e ${awayTactical.observedGames} per ${away.name}: sono segnali, non un'identità tattica definitiva.` });
+    if (!analysis.lineups.official) alerts.push({ level: 'alta', title: 'Undici non confermati', text: 'La lettura può cambiare con turnover, assenze o un attaccante lasciato fuori. Ricontrolla vicino al calcio d’inizio.' });
+    const availabilityNews = news.filter(item => ['Disponibilità', 'Formazioni'].includes(item.tag));
+    if (availabilityNews.length) alerts.push({ level: 'media', title: 'News da verificare', text: `${availabilityNews.length} titoli recenti riguardano disponibilità o formazione: apri le fonti prima di considerarli confermati.` });
+
+    const tactical = { home: homeTactical, away: awayTactical, matchup };
+    return {
+      engine: { version: '1.0', name: 'VANTAGGIO Match Intelligence', generatedAt: nowIso() },
+      event: analysis.event,
+      generatedAt: nowIso(),
+      context: analysis.context,
+      critical: critical.slice(0, 9),
+      calendar: { home: homeCalendar, away: awayCalendar },
+      tactical,
+      script: buildMatchScript(analysis.context, tactical, home.name, away.name),
+      tournamentStats: analysis.tournamentStats,
+      leaders: analysis.leaders,
+      lineups: analysis.lineups,
+      availability: {
+        status: 'non_confermata',
+        confirmedAbsences: [],
+        newsSignals: availabilityNews.length,
+        message: 'Il feed gratuito non offre un elenco affidabile e completo di infortuni o squalifiche per questa gara. Nessuna assenza viene inventata: verifica comunicati ufficiali e formazione.'
+      },
+      news: { articles: news.slice(0, 8), availabilitySignals: availabilityNews.length, disclaimer: 'I titoli sono segnali informativi, non conferme mediche o ufficiali: verifica sempre la fonte originale.' },
+      alerts,
+      keyQuestion: analysis.context.keyQuestion,
+      methodology: 'Context Engine: distingue dati del feed, letture derivate e punti da verificare. Integra stato della sfida, calendario, riposo, prestazioni tecniche recenti, giocatori e notizie collegate.'
     };
   }, force);
 }
@@ -751,6 +1176,13 @@ const server = http.createServer(async (req, res) => {
         const leagueId = requestUrl.searchParams.get('league') || '';
         const force = requestUrl.searchParams.get('fresh') === '1';
         const result = await getAnalysis(eventId, leagueId, force);
+        return jsonResponse(res, 200, { ok: true, data: result.value, meta: { fetchedAt: result.fetchedAt, stale: result.stale, cache: result.cache } });
+      }
+      if (pathname === '/api/intelligence') {
+        const eventId = requestUrl.searchParams.get('event') || '';
+        const leagueId = requestUrl.searchParams.get('league') || '';
+        const force = requestUrl.searchParams.get('fresh') === '1';
+        const result = await getIntelligence(eventId, leagueId, force);
         return jsonResponse(res, 200, { ok: true, data: result.value, meta: { fetchedAt: result.fetchedAt, stale: result.stale, cache: result.cache } });
       }
       return jsonResponse(res, 404, { ok: false, error: 'Endpoint non trovato' });
