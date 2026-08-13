@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: vantaggio-calcio-live
+    name: vantaggio-calcio-uamisjd
     runtime: node
     plan: free
     region: frankfurt
