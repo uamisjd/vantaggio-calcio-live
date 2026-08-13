@@ -119,7 +119,9 @@ function noInvalidNumbers(value) {
   check(badMatchesLeague.response.status === 400 && badMatchesLeague.body?.ok === false, 'Competizione partite inesistente rifiutata');
   check(badTableLeague.response.status === 400 && badTableLeague.body?.ok === false, 'Competizione classifica inesistente rifiutata');
   const malformedPath = await request('/%E0%A4%A');
-  check(malformedPath.response.status === 400 && malformedPath.body?.ok === false, 'Percorso malformato gestito senza arrestare il server');
+  check(malformedPath.response.status >= 400, 'Percorso malformato rifiutato dall’edge o dal server');
+  const healthAfterErrors = await request('/api/status');
+  check(healthAfterErrors.response.status === 200 && healthAfterErrors.body?.ok, 'Server operativo dopo le richieste malformate');
 
   console.log(`Audit ${base}: ${checks.length - failures.length}/${checks.length} controlli superati.`);
   if (failures.length) {
