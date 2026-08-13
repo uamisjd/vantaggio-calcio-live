@@ -19,7 +19,9 @@ const state = {
   news: [],
   tables: {},
   analyses: {},
+  analysisErrors: {},
   intelligence: {},
+  matchRoomTabs: {},
   teamDna: {},
   sourceHealth: null,
   modelSnapshots: readLocalJson('vantaggio:modelSnapshots:v1', {}),
@@ -403,6 +405,7 @@ async function refreshAll(manual = false) {
     }
     state.selectedDate = 'all';
     state.analyses = {};
+    state.analysisErrors = {};
     state.intelligence = {};
     state.powerPicks = [];
   }
@@ -513,7 +516,7 @@ function filteredDashboardMatches() {
 
 function radarMatches(limit = 20) {
   return state.matches
-    .filter(isUpcoming)
+    .filter(match => match.state === 'pre' && new Date(match.date).getTime() > Date.now())
     .sort((a, b) => b.opportunity - a.opportunity || new Date(a.date) - new Date(b.date))
     .slice(0, limit);
 }
@@ -911,8 +914,7 @@ function openMatch(id) {
   modal.innerHTML = `<button class="modal-close" data-close-modal aria-label="Chiudi">${icon('x')}</button>
     <header class="modal-hero"><span class="modal-competition"><i></i>${escapeHtml(match.league.label)} ${match.round ? `· ${escapeHtml(match.round)}` : ''}</span><div class="modal-fixture"><div class="modal-team">${teamLogo(match.home, 'modal-logo')}<strong>${escapeHtml(match.home.name)}</strong><button class="dna-trigger" data-team-dna="${escapeHtml(match.home.id)}" data-team-name="${escapeHtml(match.home.name)}" data-team-logo="${escapeHtml(safeUrl(match.home.logo))}" data-team-league="${escapeHtml(match.league.id)}">TEAM DNA</button></div><div class="modal-score"><strong>${escapeHtml(status.main)}</strong><span>${escapeHtml(status.sub)}</span></div><div class="modal-team">${teamLogo(match.away, 'modal-logo')}<strong>${escapeHtml(match.away.name)}</strong><button class="dna-trigger" data-team-dna="${escapeHtml(match.away.id)}" data-team-name="${escapeHtml(match.away.name)}" data-team-logo="${escapeHtml(safeUrl(match.away.logo))}" data-team-league="${escapeHtml(match.league.id)}">TEAM DNA</button></div></div></header>
     <div class="modal-body"><div class="modal-meta-grid"><div class="modal-meta"><span>Data e ora</span><strong>${escapeHtml(displayDate(match.date, true))} · ${escapeHtml(fmtTime.format(new Date(match.date)))}</strong></div><div class="modal-meta"><span>Stadio</span><strong title="${escapeHtml(match.venue)}">${escapeHtml(match.venue)}</strong></div><div class="modal-meta"><span>Indice interesse</span><strong>${match.opportunity}/100</strong></div></div>
-      <div id="matchIntelligence"><section class="deep-first-loading"><span class="intel-mark">ANALISI APPROFONDITA</span><h3>Sto costruendo la lettura della partita…</h3><p>Contesto, stagione, forma, stili, riposo, dati reali e affidabilità delle fonti.</p><i></i></section></div>
-      <details class="model-drawer"><summary><div>${icon('radar')}<span><strong>Power Model 2.1</strong><small>Probabilità, gol attesi e campione statistico</small></span></div>${icon('chevron')}</summary><div id="advancedAnalysis">${analysisLoading()}</div></details>
+      <div id="matchIntelligence"><section class="deep-first-loading"><span class="intel-mark">MATCH CONTROL ROOM</span><h3>Sto organizzando il dossier…</h3><p>Sintesi, squadre, numeri e verifiche in un’unica architettura adattiva.</p><i></i></section></div>
       <div class="modal-actions"><button class="button ${favorite ? '' : 'primary'}" data-favorite="${escapeHtml(match.id)}">${icon('star')} ${favorite ? 'Rimuovi dai salvati' : 'Salva partita'}</button><button class="button" data-close-modal>Chiudi</button></div>
     </div>`;
   $('#modalLayer').hidden = false;
@@ -934,23 +936,26 @@ function analysisLoading() {
 
 async function loadAnalysis(match, force = false) {
   const key = `${match.league.id}:${match.id}`;
-  const root = $('#advancedAnalysis');
-  if (!root) return;
+  const activeModelRoot = () => $('#roomPowerMount') || $('#advancedAnalysis');
   if (state.analyses[key] && !force) {
     archivePreKickoffModel(match, state.analyses[key]);
-    root.innerHTML = renderPowerAnalysis(state.analyses[key]);
+    const root = activeModelRoot();
+    if (root) root.innerHTML = renderPowerAnalysis(state.analyses[key]);
     return;
   }
   try {
     const payload = await api(`/api/analysis?event=${encodeURIComponent(match.id)}&league=${encodeURIComponent(match.league.id)}${force ? '&fresh=1' : ''}`);
     state.analyses[key] = payload.data;
+    delete state.analysisErrors[key];
     archivePreKickoffModel(match, payload.data);
-    if ($('#matchModal')?.dataset.eventId === match.id && $('#advancedAnalysis')) $('#advancedAnalysis').innerHTML = renderPowerAnalysis(payload.data);
+    if ($('#matchModal')?.dataset.eventId === match.id && activeModelRoot()) activeModelRoot().innerHTML = renderPowerAnalysis(payload.data);
     const intelRoot = $('#matchIntelligence');
     if ($('#matchModal')?.dataset.eventId === match.id && intelRoot?.dataset.fallback === '1') intelRoot.innerHTML = renderFallbackDeepAnalysis(match, payload.data, intelRoot.dataset.error || 'Riepilogo completo non disponibile');
   } catch (error) {
-    if ($('#matchModal')?.dataset.eventId === match.id && $('#advancedAnalysis')) {
-      $('#advancedAnalysis').innerHTML = `<section class="power-error">${icon('info')}<div><strong>Analisi avanzata non disponibile</strong><p>${escapeHtml(error.message)}. Restano validi calendario, forma sintetica e dati live.</p></div></section>`;
+    state.analysisErrors[key] = error.message;
+    const root = activeModelRoot();
+    if ($('#matchModal')?.dataset.eventId === match.id && root) {
+      root.innerHTML = `<section class="power-error">${icon('info')}<div><strong>Analisi avanzata non disponibile</strong><p>${escapeHtml(error.message)}. Restano validi calendario, forma sintetica e dati live.</p></div></section>`;
     }
   }
 }
@@ -981,6 +986,11 @@ function renderPowerAnalysis(data) {
     const homeStats = (data.matchStats || []).find(item => item.teamId === data.event.home.id)?.metrics || {};
     const awayStats = (data.matchStats || []).find(item => item.teamId === data.event.away.id)?.metrics || {};
     return `<section class="power-analysis post-match-archive"><header class="power-title"><div><span class="power-mark">MATCH ARCHIVE</span><h3>La previsione si ferma, inizia la review</h3></div><span class="archive-ft">FT</span></header><div class="archive-score"><div>${teamLogo(data.event.home, 'power-team-logo')}<strong>${escapeHtml(data.event.home.name)}</strong></div><b>${data.event.home.score}–${data.event.away.score}</b><div>${teamLogo(data.event.away, 'power-team-logo')}<strong>${escapeHtml(data.event.away.name)}</strong></div></div><div class="archive-kpis"><span><b>${homeStats.possession ?? '–'}${homeStats.possession == null ? '' : '%'}</b>possesso casa</span><span><b>${homeStats.shots ?? '–'}–${awayStats.shots ?? '–'}</b>tiri</span><span><b>${homeStats.shotsOnTarget ?? '–'}–${awayStats.shotsOnTarget ?? '–'}</b>in porta</span><span><b>${homeStats.passAccuracy ?? '–'}${homeStats.passAccuracy == null ? '' : '%'}</b>passaggi casa</span></div><div class="archive-rule">${icon('shield')}<span>Il modello non viene ricalcolato dopo il risultato: sarebbe un dato retroattivo e fuorviante. La Deep Match Review usa invece ciò che è realmente accaduto.</span></div></section>`;
+  }
+  if (data.event?.state === 'in') {
+    const homeStats = (data.matchStats || []).find(item => item.teamId === data.event.home.id)?.metrics || {};
+    const awayStats = (data.matchStats || []).find(item => item.teamId === data.event.away.id)?.metrics || {};
+    return `<section class="power-analysis live-model-paused"><header class="power-title"><div><span class="power-mark">LIVE CONTROL</span><h3>Modello decisionale sospeso</h3></div><span class="archive-ft">LIVE</span></header><div class="archive-score"><div>${teamLogo(data.event.home, 'power-team-logo')}<strong>${escapeHtml(data.event.home.name)}</strong></div><b>${data.event.home.score}–${data.event.away.score}</b><div>${teamLogo(data.event.away, 'power-team-logo')}<strong>${escapeHtml(data.event.away.name)}</strong></div></div><div class="archive-kpis"><span><b>${homeStats.possession ?? '–'}${homeStats.possession == null ? '' : '%'}</b>possesso casa</span><span><b>${homeStats.shots ?? '–'}–${awayStats.shots ?? '–'}</b>tiri</span><span><b>${homeStats.shotsOnTarget ?? '–'}–${awayStats.shotsOnTarget ?? '–'}</b>in porta</span><span><b>${homeStats.yellowCards ?? '–'}–${awayStats.yellowCards ?? '–'}</b>gialli</span></div><div class="archive-rule">${icon('shield')}<span>Durante il live non trasformiamo un modello pre-gara in consiglio attivo. Qui restano soltanto score e statistiche effettivamente pubblicate.</span></div></section>`;
   }
   const signals = data.signals || [];
   const primary = signals[0];
@@ -1061,51 +1071,158 @@ function deepTeamCase(block) {
   return `<article class="deep-team-case">${teamLogo(block.team, 'deep-team-logo')}<div class="deep-team-title"><strong>${escapeHtml(block.team.name)}</strong><span>${escapeHtml(block.style)} · ${block.observedGames} boxscore tecnici</span></div>${block.season?.played ? `<div class="deep-season-line"><span>SEASON VAULT ${escapeHtml(block.season.season)}</span><strong>${block.season.played} gare · ${block.season.goalsFor} gol · ${block.season.wins}V ${block.season.draws}P ${block.season.losses}S</strong>${block.season.competitions?.[0] ? `<small>${escapeHtml(block.season.competitions[0].name)}: ${block.season.competitions[0].played} gare, ${block.season.competitions[0].goalsFor} gol</small>` : ''}</div>` : ''}<div class="deep-case-kpis"><span><b>${block.recent.avgGoalsFor ?? '–'}</b>gol fatti</span><span><b>${block.recent.avgGoalsAgainst ?? '–'}</b>subiti</span><span><b>${metrics.possession ?? '–'}${metrics.possession == null ? '' : '%'}</b>${block.actualMatch ? 'possesso gara' : 'possesso campione'}</span><span><b>${metrics.shots ?? '–'}</b>${block.actualMatch ? 'tiri gara' : 'tiri medi'}</span></div>${(block.traits || []).slice(0, 2).map(text => `<p>${icon('chevron')}<span>${escapeHtml(text)}</span></p>`).join('')}${(block.vulnerabilities || []).slice(0, 1).map(text => `<p class="weak">${icon('info')}<span>${escapeHtml(text)}</span></p>`).join('')}</article>`;
 }
 
-function deepDiveMarkup(deep) {
-  if (!deep) return '';
-  return `<section class="deep-dive ${deep.mode}"><header><div><span>${escapeHtml(deep.label)}</span><h3>${escapeHtml(deep.title)}</h3><p>${escapeHtml(deep.dek)}</p></div><b>${deep.mode === 'post' ? 'REVIEW' : 'PREVIEW'}</b></header><div class="deep-number-grid">${(deep.keyNumbers || []).map(item => `<article><span>${escapeHtml(item.label)}</span><strong>${escapeHtml(item.value)}</strong><small>${escapeHtml(item.note)}</small></article>`).join('')}</div><div class="deep-story">${(deep.paragraphs || []).map(item => `<article class="${item.type.toLowerCase()}"><span>${escapeHtml(item.type)}</span><div><h4>${escapeHtml(item.title)}</h4><p>${escapeHtml(item.text)}</p></div></article>`).join('')}</div><div class="deep-team-grid">${(deep.teamCases || []).map(deepTeamCase).join('')}</div>${(deep.keyMoments || []).length ? `<section class="deep-moments"><span>MOMENTI DECISIVI</span><div>${deep.keyMoments.map(moment => `<article><b>${escapeHtml(moment.minute)}</b><strong>${escapeHtml(moment.player || moment.teamName)}</strong><small>${escapeHtml(moment.label)}</small></article>`).join('')}</div></section>` : ''}${deep.marketSnapshot ? `<section class="deep-market"><header><span>MARKET SNAPSHOT</span><strong>${escapeHtml(deep.marketSnapshot.provider)}</strong></header><div>${deep.marketSnapshot.prices.map(price => `<article><span>${escapeHtml(price.label)}</span><b>${price.decimal.toFixed(2)}</b></article>`).join('')}${deep.marketSnapshot.totalLine != null ? `<article><span>Linea gol</span><b>${deep.marketSnapshot.totalLine}</b></article>` : ''}</div><p>${escapeHtml(deep.marketSnapshot.note)}</p></section>` : ''}<div class="deep-bottom"><article><span>${deep.mode === 'post' ? 'LETTURA RESPONSABILE' : 'COSA MONITORARE'}</span>${(deep.watchlist || []).map(text => `<p>${icon('radar')}<span>${escapeHtml(text)}</span></p>`).join('') || '<p>Nessun avviso aggiuntivo.</p>'}</article><article class="deep-missing"><span>DATI NON DISPONIBILI</span>${(deep.unavailable || []).map(text => `<p>${icon('info')}<span>${escapeHtml(text)}</span></p>`).join('')}</article></div><footer>${icon('shield')}<span>${escapeHtml(deep.sourceNote)}</span></footer></section>`;
-}
-
 function matchChangeHistory(eventId) {
   const history = state.changeLog.filter(item => item.eventId === String(eventId)).sort((a, b) => new Date(b.happenedAt) - new Date(a.happenedAt));
   if (!history.length) return `<div class="intel-empty">Nessuna variazione osservata in questo browser. La baseline è attiva per orario, sede, stato, score, lineups e news.</div>`;
   return `<div class="match-history">${history.map(item => `<article><span class="change-icon">${icon(changeIcon(item.kind))}</span><div><strong>${escapeHtml(item.title)}</strong><p>${escapeHtml(item.text)}</p><small>${escapeHtml(displayNewsDate(item.happenedAt))} · ${escapeHtml(fmtTime.format(new Date(item.happenedAt)))}</small></div></article>`).join('')}</div>`;
 }
 
-function renderIntelligence(data) {
-  const home = data.event.home;
-  const away = data.event.away;
+function collectEvidence(data) {
+  const unique = values => [...new Set(values.filter(Boolean).map(value => String(value).trim()))];
+  const critical = data.critical || [];
+  const paragraphs = data.deepDive?.paragraphs || [];
+  const facts = unique([
+    ...critical.filter(item => item.type === 'Fatto').map(item => item.text),
+    ...paragraphs.filter(item => item.type === 'Fatto').map(item => item.text),
+    data.lineups?.official ? 'Entrambi gli undici ufficiali sono presenti nel feed evento.' : ''
+  ]);
+  const readings = unique([
+    ...critical.filter(item => item.type === 'Lettura').map(item => item.text),
+    ...paragraphs.filter(item => item.type === 'Lettura').map(item => item.text)
+  ]);
+  const unknown = unique([
+    ...critical.filter(item => item.type === 'Verifica').map(item => item.text),
+    ...(data.deepDive?.unavailable || []),
+    !data.lineups?.official ? data.lineups?.message : '',
+    data.availability?.status === 'non_documentata' ? data.availability.message : ''
+  ]);
+  const revisions = unique((data.availability?.teams || []).flatMap(team => (team.lineupOverrides || []).map(item => `${item.player}: la segnalazione precedente è superata dalla presenza nell’XI ufficiale.`)));
+  return { facts, readings, unknown, revisions };
+}
+
+function evidenceMapMarkup(data, expanded = false) {
+  const evidence = collectEvidence(data);
+  const column = (label, tone, items) => `<article class="evidence-map-column ${tone}"><header><span>${label}</span><strong>${items.length}</strong></header>${expanded ? `<div>${items.length ? items.slice(0, 8).map(text => `<p>${icon(tone === 'facts' ? 'shield' : tone === 'readings' ? 'radar' : 'info')}<span>${escapeHtml(text)}</span></p>`).join('') : '<p class="evidence-none">Nessun elemento in questa categoria.</p>'}</div>` : `<small>${escapeHtml(items[0] || (tone === 'facts' ? 'Nessun fatto aggiuntivo.' : tone === 'readings' ? 'Nessuna lettura derivata.' : 'Nessun punto aggiuntivo.'))}</small>`}</article>`;
+  return `<section class="evidence-map ${expanded ? 'expanded' : 'compact'}"><header><div><span class="section-code">EVIDENCE MAP</span><h4>Fatti, letture e vuoti senza confusione</h4></div><small>${evidence.facts.length + evidence.readings.length + evidence.unknown.length + evidence.revisions.length} elementi classificati</small></header><div>${column('Fatti verificati', 'facts', evidence.facts)}${column('Letture derivate', 'readings', evidence.readings)}${column('Da verificare', 'unknown', evidence.unknown)}${evidence.revisions.length ? column('Revisioni', 'revisions', evidence.revisions) : ''}</div></section>`;
+}
+
+function readinessGate(data) {
+  const eventState = data.event?.state || 'pre';
+  const checkMarkup = check => `<span class="readiness-check ${check.tone}"><i></i><b>${escapeHtml(check.label)}</b><small>${escapeHtml(check.value)}</small></span>`;
+  if (eventState === 'post' || data.event?.completed) {
+    return `<section class="readiness-gate closed"><header><div><span>MATCH READINESS GATE</span><h4>Decisione chiusa · review attiva</h4><p>Nessun consiglio viene mantenuto live dopo il finale. Il dossier usa risultato e dati realmente accaduti.</p></div><b>ARCHIVIO</b></header><div>${[
+      { tone: 'good', label: 'Stato', value: 'Finale' },
+      { tone: data.lineups?.official ? 'good' : 'warn', label: 'Lineup', value: data.lineups?.official ? 'Ufficiali' : 'Parziali' },
+      { tone: data.reliability?.overall >= 65 ? 'good' : 'warn', label: 'Copertura', value: `${data.reliability?.overall ?? '–'}/100` }
+    ].map(checkMarkup).join('')}</div></section>`;
+  }
+  if (eventState === 'in') {
+    return `<section class="readiness-gate live"><header><div><span>MATCH READINESS GATE</span><h4>Partita in corso · modello sospeso</h4><p>Score, eventi, formazioni e statistiche effettive sostituiscono qualsiasi lettura decisionale pre-gara.</p></div><b>LIVE</b></header><div>${[
+      { tone: 'good', label: 'Feed', value: 'In diretta' },
+      { tone: data.lineups?.official ? 'good' : 'warn', label: 'Lineup', value: data.lineups?.official ? 'Ufficiali' : 'Parziali' },
+      { tone: data.reliability?.overall >= 65 ? 'good' : 'warn', label: 'Copertura', value: `${data.reliability?.overall ?? '–'}/100` }
+    ].map(checkMarkup).join('')}</div></section>`;
+  }
+  const minutes = (new Date(data.event?.date).getTime() - Date.now()) / 60000;
+  const sample = (data.tactical?.home?.observedGames || 0) + (data.tactical?.away?.observedGames || 0);
+  const ageMinutes = Math.max(0, (Date.now() - new Date(data.generatedAt || data.engine?.generatedAt || Date.now()).getTime()) / 60000);
+  const checks = [
+    { label: 'Formazioni', value: data.lineups?.official ? 'Ufficiali' : minutes <= 75 ? 'Mancano vicino al via' : 'In attesa', tone: data.lineups?.official ? 'good' : minutes <= 75 ? 'bad' : 'warn' },
+    { label: 'Disponibilità', value: `${data.availability?.score ?? 0}/100`, tone: (data.availability?.score || 0) >= 65 ? 'good' : (data.availability?.score || 0) >= 45 ? 'warn' : 'bad' },
+    { label: 'Affidabilità', value: `${data.reliability?.overall ?? 0}/100`, tone: (data.reliability?.overall || 0) >= 65 ? 'good' : (data.reliability?.overall || 0) >= 45 ? 'warn' : 'bad' },
+    { label: 'Campione', value: `${sample} boxscore`, tone: sample >= 4 ? 'good' : sample >= 2 ? 'warn' : 'bad' },
+    { label: 'Freschezza', value: ageMinutes < 2 ? 'Adesso' : `${Math.round(ageMinutes)} min`, tone: ageMinutes <= 20 ? 'good' : ageMinutes <= 60 ? 'warn' : 'bad' }
+  ];
+  const bad = checks.filter(check => check.tone === 'bad').length;
+  const warnings = checks.filter(check => check.tone === 'warn').length;
+  const tone = bad >= 2 ? 'blocked' : bad || warnings >= 2 ? 'caution' : 'ready';
+  const title = tone === 'ready' ? 'Pronta per una decisione informata' : tone === 'caution' ? 'Decisione possibile, ma con riserve' : 'Non pronta: troppe prove mancanti';
+  const badge = tone === 'ready' ? 'PRONTA' : tone === 'caution' ? 'CAUTELA' : 'ATTENDI';
+  return `<section class="readiness-gate ${tone}"><header><div><span>MATCH READINESS GATE</span><h4>${title}</h4><p>Il gate misura se le evidenze sono mature; non promette il risultato e non sostituisce il controllo delle fonti.</p></div><b>${badge}</b></header><div>${checks.map(checkMarkup).join('')}</div></section>`;
+}
+
+function executiveBriefMarkup(data) {
+  const deep = data.deepDive || {};
+  const live = data.event?.state === 'in';
+  const post = data.event?.state === 'post' || data.event?.completed;
+  const label = post ? 'DEEP MATCH REVIEW' : live ? 'LIVE MATCH BRIEF' : 'DEEP RESEARCH BRIEF';
+  const title = live ? `${data.event.home.name} ${data.event.home.score}–${data.event.away.score} ${data.event.away.name}` : deep.title || `${data.event.home.name}–${data.event.away.name}`;
+  const dek = live ? 'Il dossier passa dai segnali pre-gara ai fatti pubblicati durante l’incontro.' : deep.dek || '';
+  const paragraphs = (deep.paragraphs || []).slice(0, 3);
+  const moments = (deep.keyMoments || []).slice(0, 6);
+  return `<section class="executive-brief ${post ? 'post' : live ? 'live' : 'pre'}"><header><div><span>${label}</span><h3>${escapeHtml(title)}</h3><p>${escapeHtml(dek)}</p></div><b>${post ? 'REVIEW' : live ? 'LIVE' : 'BRIEF'}</b></header>${(deep.keyNumbers || []).length ? `<div class="brief-key-numbers">${deep.keyNumbers.slice(0, 4).map(item => `<article><span>${escapeHtml(item.label)}</span><strong>${escapeHtml(item.value)}</strong><small>${escapeHtml(item.note)}</small></article>`).join('')}</div>` : ''}${paragraphs.length ? `<div class="brief-story">${paragraphs.map(item => `<article class="${String(item.type || '').toLowerCase()}"><span>${escapeHtml(item.type)}</span><div><h4>${escapeHtml(item.title)}</h4><p>${escapeHtml(item.text)}</p></div></article>`).join('')}</div>` : ''}${moments.length ? `<div class="brief-moments"><span>MOMENTI CHIAVE</span>${moments.map(moment => `<article><b>${escapeHtml(moment.minute)}</b><strong>${escapeHtml(moment.player || moment.teamName)}</strong><small>${escapeHtml(moment.label)}</small></article>`).join('')}</div>` : ''}</section>`;
+}
+
+function summaryWatchMarkup(data) {
+  const watch = data.deepDive?.watchlist || [];
+  const alerts = data.alerts || [];
+  if (!watch.length && !alerts.length) return '';
+  return `<section class="summary-watch"><header><span class="section-code">DECISION WATCH</span><h4>Cosa può cambiare la lettura</h4></header><div>${alerts.slice(0, 3).map(alert => `<article class="${escapeHtml(alert.level)}">${icon('info')}<div><strong>${escapeHtml(alert.title)}</strong><p>${escapeHtml(alert.text)}</p></div></article>`).join('')}${watch.slice(0, 3).map(text => `<article>${icon('radar')}<div><strong>Da monitorare</strong><p>${escapeHtml(text)}</p></div></article>`).join('')}</div></section>`;
+}
+
+function matchRoomSummary(data) {
   const context = data.context || {};
   const aggregate = context.aggregate;
+  const stake = aggregate ? `${aggregate.home}-${aggregate.away} aggregato · ${context.scenario}` : context.phase || context.scenario || 'Partita singola';
+  const sample = (data.tactical?.home?.observedGames || 0) + (data.tactical?.away?.observedGames || 0);
+  return `<div class="match-room-pane summary-pane">${readinessGate(data)}${executiveBriefMarkup(data)}<section class="room-context-strip"><article><span>CONTESTO</span><strong>${escapeHtml(stake)}</strong><small>${escapeHtml(context.venue?.name || 'Sede non disponibile')}</small></article><article><span>FORMAZIONI</span><strong>${data.lineups?.official ? 'Ufficiali' : 'In attesa'}</strong><small>${data.lineups?.official ? 'Entrambi gli XI presenti' : 'Nessuna formazione ipotizzata'}</small></article><article><span>CAMPIONE</span><strong>${sample} boxscore</strong><small>Copertura dichiarata</small></article></section>${evidenceMapMarkup(data)}${summaryWatchMarkup(data)}</div>`;
+}
+
+function matchRoomTeams(data) {
+  const deep = data.deepDive || {};
+  return `<div class="match-room-pane teams-pane"><section class="room-group"><header><span class="section-code">TEAM PICTURE</span><h3>Identità e forma, nello stesso posto</h3><p>Season Vault, forma recente e profilo tecnico non sono più separati nel dossier.</p></header><div class="deep-team-grid">${(deep.teamCases || []).map(deepTeamCase).join('') || '<div class="intel-empty">Profili squadra non disponibili.</div>'}</div></section><section class="room-group"><header><span class="section-code">TACTICAL MATCHUP</span><h3>Stili e incrocio tecnico</h3></header><div class="tactical-grid">${tacticalCard(data.tactical.home, data.event.home)}${tacticalCard(data.tactical.away, data.event.away)}</div><div class="matchup-box"><span>INCROCIO DI STILI</span>${(data.tactical.matchup || []).map(text => `<p>${escapeHtml(text)}</p>`).join('')}</div></section><section class="room-group"><header><span class="section-code">SCHEDULE & AVAILABILITY</span><h3>Calendario, undici e disponibilità</h3></header><div class="calendar-intel-grid">${calendarIntelCard(data.calendar.home, data.event.home)}${calendarIntelCard(data.calendar.away, data.event.away)}</div>${lineupIntel(data.lineups, data.availability)}</section></div>`;
+}
+
+function matchRoomNumbers(data) {
+  const key = `${data.event.leagueId}:${data.event.id}`;
+  const model = state.analyses[key];
+  const modelError = state.analysisErrors[key];
+  const modelContent = model ? renderPowerAnalysis(model) : modelError ? `<section class="power-error">${icon('info')}<div><strong>Analisi avanzata non disponibile</strong><p>${escapeHtml(modelError)}. Restano validi calendario, forma e dati live.</p></div></section>` : analysisLoading();
   const tournamentMarkup = (data.tournamentStats || []).length ? `<div class="tournament-intel"><span class="section-overline">NUMERI NEL TORNEO</span><div>${data.tournamentStats.map(team => `<article>${teamLogo(team, 'intel-team-logo')}<strong>${escapeHtml(team.name)}</strong><span><b>${team.goals ?? '–'}</b>gol</span><span><b>${team.conceded ?? '–'}</b>subiti</span><span><b>${team.goalDifference == null ? '–' : team.goalDifference > 0 ? `+${team.goalDifference}` : team.goalDifference}</b>diff.</span></article>`).join('')}</div></div>` : '';
+  return `<div class="match-room-pane numbers-pane"><section class="room-group model-room-group"><header><span class="section-code">POWER MODEL 2.1</span><h3>Modello, probabilità e campione</h3><p>Il modello vive qui soltanto: pre-gara è valutabile, durante il live viene sospeso, dopo il finale diventa archivio.</p></header><div id="roomPowerMount">${modelContent}</div></section><section class="room-group"><header><span class="section-code">TOURNAMENT DATA</span><h3>Numeri e giocatori della competizione</h3></header>${tournamentMarkup}<div class="leaders-intel-grid">${(data.leaders || []).map(leaderIntelCard).join('') || '<div class="intel-empty">Leader del torneo non disponibili nel feed.</div>'}</div></section></div>`;
+}
+
+function matchRoomVerify(data) {
   const newsMarkup = (data.news?.articles || []).length ? data.news.articles.map(article => `<article class="intel-news" data-news-url="${escapeHtml(safeUrl(article.link))}" tabindex="0"><header><span>${escapeHtml(article.tag)}</span><em class="${escapeHtml(article.reliability || 'da_verificare')}">${article.reliability === 'forte' ? 'Fonte forte' : article.reliability === 'media' ? 'Fonte nota' : 'Da verificare'}</em></header><h5>${escapeHtml(article.title)}</h5><div><b>${escapeHtml(article.publisher)}</b><small>${article.published ? escapeHtml(displayNewsDate(article.published)) : ''}</small>${icon('external')}</div></article>`).join('') : `<div class="intel-empty">Nessun articolo chiaramente collegato trovato nelle fonti indicizzate.</div>`;
-  const stakeText = aggregate ? `${aggregate.home}-${aggregate.away} aggregato · ${escapeHtml(context.scenario)}` : escapeHtml(context.phase || context.scenario || 'Partita singola');
-  const essential = (data.critical || []).filter(item => item.type === 'Fatto').slice(0, 3);
-  return `<section class="intelligence-room intelligence-clean">
-    <header class="intel-title clean-title"><div><span class="intel-mark">MATCH INTELLIGENCE</span><h3>Analisi approfondita</h3></div><div class="intel-live"><i></i>AFFIDABILITÀ ${data.reliability?.overall ?? '–'}/100</div></header>
-    ${deepDiveMarkup(data.deepDive)}
-    <section class="evidence-summary">
-      <article><span>CONTESTO</span><strong>${stakeText}</strong><p>${escapeHtml(context.venue?.name || 'Sede non disponibile')}${context.venue?.city ? ` · ${escapeHtml(context.venue.city)}` : ''}</p></article>
-      <article><span>FORMAZIONI</span><strong>${data.lineups?.official ? 'Ufficiali' : 'In attesa'}</strong><p>${data.lineups?.official ? 'Entrambi gli undici presenti nel feed.' : 'Non vengono ipotizzate.'}</p></article>
-      <article><span>COPERTURA</span><strong>${data.tactical.home.observedGames + data.tactical.away.observedGames} boxscore tecnici</strong><p>${essential[0] ? escapeHtml(essential[0].text) : 'Campione dichiarato nel dossier.'}</p></article>
-    </section>
-    ${(data.alerts || []).length ? `<section class="red-flags compact-flags"><header>${icon('info')}<div><span>RED FLAGS</span><strong>Prima di fidarti della lettura</strong></div></header>${data.alerts.slice(0, 4).map(alert => `<article class="${alert.level}"><i></i><div><strong>${escapeHtml(alert.title)}</strong><p>${escapeHtml(alert.text)}</p></div></article>`).join('')}</section>` : ''}
-    <div class="intel-clean-hub"><span class="section-code">EVIDENZE CONSULTABILI</span><h3>Apri solo ciò che vuoi verificare</h3><p>L’analisi principale è sopra. Qui restano dati, fonti e campioni senza ripetere la stessa storia.</p></div>
-    <details class="intel-details"><summary><div><span>01</span><strong>Tattica e boxscore osservati</strong></div>${icon('chevron')}</summary><div class="tactical-grid">${tacticalCard(data.tactical.home, home)}${tacticalCard(data.tactical.away, away)}</div><div class="matchup-box"><span>INCROCIO DI STILI</span>${(data.tactical.matchup || []).map(text => `<p>${escapeHtml(text)}</p>`).join('')}</div></details>
-    <details class="intel-details"><summary><div><span>02</span><strong>Calendario, formazioni e disponibilità</strong></div>${icon('chevron')}</summary><div class="calendar-intel-grid">${calendarIntelCard(data.calendar.home, home)}${calendarIntelCard(data.calendar.away, away)}</div>${lineupIntel(data.lineups, data.availability)}</details>
-    <details class="intel-details"><summary><div><span>03</span><strong>Numeri e giocatori nel torneo</strong></div>${icon('chevron')}</summary>${tournamentMarkup}<div class="leaders-intel-grid">${(data.leaders || []).map(leaderIntelCard).join('') || '<div class="intel-empty">Leader del torneo non disponibili nel feed.</div>'}</div></details>
-    <details class="intel-details"><summary><div><span>04</span><strong>News collegate e fonti</strong></div>${icon('chevron')}</summary><div class="intel-news-grid">${newsMarkup}</div><p class="news-disclaimer">${escapeHtml(data.news?.disclaimer || '')}</p></details>
-    <details class="intel-details"><summary><div><span>05</span><strong>What Changed · storia della partita</strong></div>${icon('chevron')}</summary>${matchChangeHistory(data.event.id)}</details>
-    <details class="intel-details reliability-details"><summary><div><span>06</span><strong>Data Reliability Ledger</strong></div>${icon('chevron')}</summary>${reliabilityLedgerMarkup(data.reliability, true)}</details>
-    <div class="intel-method">${icon('shield')}<span>${escapeHtml(data.methodology)}</span></div>
-  </section>`;
+  const missing = data.deepDive?.unavailable || [];
+  return `<div class="match-room-pane verify-pane">${evidenceMapMarkup(data, true)}<details class="room-disclosure" open><summary><div><span>01</span><strong>Fonti e news collegate</strong></div>${icon('chevron')}</summary><div class="intel-news-grid">${newsMarkup}</div><p class="news-disclaimer">${escapeHtml(data.news?.disclaimer || '')}</p></details><details class="room-disclosure"><summary><div><span>02</span><strong>What Changed · storia della partita</strong></div>${icon('chevron')}</summary>${matchChangeHistory(data.event.id)}</details><details class="room-disclosure"><summary><div><span>03</span><strong>Data Reliability Ledger</strong></div>${icon('chevron')}</summary>${reliabilityLedgerMarkup(data.reliability, true)}</details><section class="verification-footer"><article><span>DATI NON DISPONIBILI</span>${missing.length ? missing.map(text => `<p>${icon('info')}<span>${escapeHtml(text)}</span></p>`).join('') : '<p>Nessun vuoto aggiuntivo dichiarato.</p>'}</article><article><span>METODO</span><p>${icon('shield')}<span>${escapeHtml(data.methodology)}</span></p><p>${icon('shield')}<span>${escapeHtml(data.deepDive?.sourceNote || '')}</span></p></article></section></div>`;
+}
+
+function activateMatchRoomTab(eventId, tab, focus = false) {
+  const allowed = ['summary', 'teams', 'numbers', 'verify'];
+  if (!allowed.includes(tab)) return;
+  state.matchRoomTabs[eventId] = tab;
+  const intelligence = Object.values(state.intelligence).find(item => String(item.event?.id) === String(eventId));
+  const root = $('#matchIntelligence');
+  if (!intelligence || !root || $('#matchModal')?.dataset.eventId !== String(eventId)) return;
+  root.innerHTML = renderIntelligence(intelligence);
+  if (focus) setTimeout(() => $(`[data-room-tab="${tab}"]`, root)?.focus(), 0);
+  if (tab === 'numbers') {
+    const match = findMatch(String(eventId));
+    if (match && !state.analyses[`${match.league.id}:${match.id}`]) void loadAnalysis(match);
+  }
+}
+
+function renderIntelligence(data) {
+  const evidence = collectEvidence(data);
+  const eventId = String(data.event.id);
+  const active = state.matchRoomTabs[eventId] || 'summary';
+  const stateMode = data.event.state === 'post' || data.event.completed ? 'post' : data.event.state === 'in' ? 'live' : 'pre';
+  const tabs = [
+    { id: 'summary', label: 'Sintesi', meta: stateMode === 'post' ? 'Review' : stateMode === 'live' ? 'Live' : 'Decisione' },
+    { id: 'teams', label: 'Squadre', meta: data.lineups?.official ? 'XI ufficiali' : `${data.availability?.structuredCount || 0} status` },
+    { id: 'numbers', label: 'Numeri', meta: `fonti ${data.reliability?.overall ?? '–'}/100` },
+    { id: 'verify', label: 'Verifiche', meta: `${evidence.unknown.length} aperte` }
+  ];
+  const panes = { summary: matchRoomSummary, teams: matchRoomTeams, numbers: matchRoomNumbers, verify: matchRoomVerify };
+  return `<section class="match-control-room ${stateMode}"><header class="control-room-head"><div><span class="intel-mark">MATCH CONTROL ROOM</span><h3>${stateMode === 'post' ? 'Review organizzata' : stateMode === 'live' ? 'Controllo partita live' : 'Decisione, prove, dettagli'}</h3><p>Quattro aree, una sola posizione per ogni informazione.</p></div><div class="intel-live"><i></i>AFFIDABILITÀ ${data.reliability?.overall ?? '–'}/100</div></header><div class="match-room-tabs" role="tablist" aria-label="Aree del dossier">${tabs.map(tab => `<button id="room-tab-${tab.id}-${eventId}" role="tab" aria-selected="${active === tab.id}" aria-controls="room-panel-${eventId}" tabindex="${active === tab.id ? '0' : '-1'}" class="${active === tab.id ? 'active' : ''}" data-room-tab="${tab.id}" data-room-event="${eventId}"><span>${escapeHtml(tab.label)}</span><small>${escapeHtml(tab.meta)}</small></button>`).join('')}</div><section id="room-panel-${eventId}" class="match-room-panel" role="tabpanel" aria-labelledby="room-tab-${active}-${eventId}">${(panes[active] || panes.summary)(data)}</section></section>`;
 }
 
 function openInfo() {
   const modal = $('#matchModal');
   delete modal.dataset.eventId;
   modal.style.removeProperty('--league-color');
-  modal.innerHTML = `<button class="modal-close" data-close-modal aria-label="Chiudi">${icon('x')}</button><header class="modal-hero"><span class="modal-competition"><i></i>TRASPARENZA</span><div style="position:relative;z-index:1;margin-top:24px"><h2 style="margin:0 0 8px;font-size:26px">Dati gratuiti, metodo chiaro.</h2><p style="margin:0;color:rgba(255,255,255,.65);font-size:11px;line-height:1.5">Nessun abbonamento e nessuna chiave API a pagamento.</p></div></header><div class="modal-body"><section class="analysis-box"><div class="analysis-box-head"><span>Fonti attive</span><strong>Feed pubblici</strong></div><p>Partite, contesto, statistiche, calendari, classifiche, lineup e injury route: feed pubblici ESPN. Fantasy Premier League ufficiale aggiunge status e aggiornamenti per la sola Premier League. Google News fornisce titoli datati e link; ANSA, Football Italia ed ESPN alimentano la Newsroom.</p></section><section class="form-comparison"><h3>Come si aggiorna</h3><p style="color:var(--muted);font-size:10px;line-height:1.6">Le partite vengono ricontrollate ogni 90 secondi mentre il sito è aperto; le notizie ogni pochi minuti. A mezzanotte il calendario avanza automaticamente sul nuovo giorno nel fuso Europe/Rome. In caso di errore temporaneo, viene mantenuta l’ultima risposta valida in cache.</p><h3 style="margin-top:18px">Power Model 2.1 + Match Intelligence</h3><p style="color:var(--muted);font-size:10px;line-height:1.6">Il Power Model combina distribuzione di Poisson, forma, precedenti, fattore campo e consenso di mercato senza margine quando presente. Match Intelligence aggiunge fase e aggregato, riposo, carico gare, campioni tecnici recenti, giocatori chiave, formazioni ufficiali e news pertinenti. Ogni elemento è marcato come fatto, lettura derivata o dato da verificare. Nessun esito è garantito.</p><h3 style="margin-top:18px">Trasparenza V4.4</h3><p style="color:var(--muted);font-size:10px;line-height:1.6">Model Track Record congela solo letture pre-kickoff e misura accuratezza, Brier e calibrazione; Source Health mostra risposte, errori, latenza e copertura; Availability Intelligence ordina lineup, record strutturati e reporting datato per tier. What Changed conserva anche la cronologia della singola partita. Un feed vuoto non significa mai rosa al completo.</p></section><div class="modal-note">${icon('shield')}<span>Preferiti, tema e alert sono salvati localmente nel browser. Il sito non richiede account e non invia dati personali.</span></div><div class="modal-actions"><button class="button primary" data-close-modal>Ho capito</button></div></div>`;
+  modal.innerHTML = `<button class="modal-close" data-close-modal aria-label="Chiudi">${icon('x')}</button><header class="modal-hero"><span class="modal-competition"><i></i>TRASPARENZA</span><div style="position:relative;z-index:1;margin-top:24px"><h2 style="margin:0 0 8px;font-size:26px">Dati gratuiti, metodo chiaro.</h2><p style="margin:0;color:rgba(255,255,255,.65);font-size:11px;line-height:1.5">Nessun abbonamento e nessuna chiave API a pagamento.</p></div></header><div class="modal-body"><section class="analysis-box"><div class="analysis-box-head"><span>Fonti attive</span><strong>Feed pubblici</strong></div><p>Partite, contesto, statistiche, calendari, classifiche, lineup e injury route: feed pubblici ESPN. Fantasy Premier League ufficiale aggiunge status e aggiornamenti per la sola Premier League. Google News fornisce titoli datati e link; ANSA, Football Italia ed ESPN alimentano la Newsroom.</p></section><section class="form-comparison"><h3>Come si aggiorna</h3><p style="color:var(--muted);font-size:10px;line-height:1.6">Le partite vengono ricontrollate ogni 90 secondi mentre il sito è aperto; le notizie ogni pochi minuti. A mezzanotte il calendario avanza automaticamente sul nuovo giorno nel fuso Europe/Rome. In caso di errore temporaneo, viene mantenuta l’ultima risposta valida in cache.</p><h3 style="margin-top:18px">Power Model 2.1 + Match Intelligence</h3><p style="color:var(--muted);font-size:10px;line-height:1.6">Il Power Model combina distribuzione di Poisson, forma, precedenti, fattore campo e consenso di mercato senza margine quando presente. Match Intelligence aggiunge fase e aggregato, riposo, carico gare, campioni tecnici recenti, giocatori chiave, formazioni ufficiali e news pertinenti. Ogni elemento è marcato come fatto, lettura derivata o dato da verificare. Nessun esito è garantito.</p><h3 style="margin-top:18px">Match Control Room V4.5</h3><p style="color:var(--muted);font-size:10px;line-height:1.6">Ogni partita usa quattro aree: Sintesi, Squadre, Numeri e Verifiche. Readiness Gate controlla maturità delle prove; Evidence Map separa fatti, letture e dati mancanti; il dossier cambia fra pre, live e post. Track Record, Source Health e Availability Intelligence restano integri, ma non sono più dispersi in blocchi concorrenti.</p></section><div class="modal-note">${icon('shield')}<span>Preferiti, tema e alert sono salvati localmente nel browser. Il sito non richiede account e non invia dati personali.</span></div><div class="modal-actions"><button class="button primary" data-close-modal>Ho capito</button></div></div>`;
   $('#modalLayer').hidden = false;
   document.body.style.overflow = 'hidden';
 }
@@ -1207,6 +1324,8 @@ function setupEvents() {
     if (fav) { event.preventDefault(); event.stopPropagation(); return toggleFavorite(fav.dataset.favorite); }
     const dna = event.target.closest('[data-team-dna]');
     if (dna) { event.preventDefault(); event.stopPropagation(); closeSearch(); return openTeamDna(dna.dataset.teamDna, dna.dataset.teamName, dna.dataset.teamLogo, dna.dataset.teamLeague); }
+    const roomTab = event.target.closest('[data-room-tab]');
+    if (roomTab) { event.preventDefault(); return activateMatchRoomTab(roomTab.dataset.roomEvent, roomTab.dataset.roomTab); }
     const match = event.target.closest('[data-match]');
     if (match) return openMatch(match.dataset.match);
     const dashLeague = event.target.closest('[data-dashboard-league]');
@@ -1250,6 +1369,14 @@ function setupEvents() {
   });
 
   document.addEventListener('keydown', event => {
+    const roomTab = event.target.closest?.('[data-room-tab]');
+    if (roomTab && ['ArrowRight', 'ArrowLeft', 'Home', 'End'].includes(event.key)) {
+      const tabs = $$('[data-room-tab]', roomTab.closest('[role="tablist"]'));
+      const current = tabs.indexOf(roomTab);
+      const next = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : event.key === 'ArrowRight' ? (current + 1) % tabs.length : (current - 1 + tabs.length) % tabs.length;
+      event.preventDefault();
+      return activateMatchRoomTab(roomTab.dataset.roomEvent, tabs[next].dataset.roomTab, true);
+    }
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); openSearch(); }
     if (event.key === 'Escape') { if (!$('#teamDnaLayer').hidden) closeTeamDna(); else if (!$('#searchLayer').hidden) closeSearch(); else if (!$('#modalLayer').hidden) closeModal(); }
     if (!$('#searchLayer').hidden && ['ArrowDown', 'ArrowUp'].includes(event.key)) {

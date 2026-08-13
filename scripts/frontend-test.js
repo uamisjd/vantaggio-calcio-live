@@ -71,10 +71,18 @@ function createNode() {
   test.state.favorites.add(pre.id);
   test.state.favoriteSnapshots[pre.id] = pre;
 
+  test.state.matchRoomTabs[pre.id] = 'summary';
+  const roomSummary = test.renderIntelligence(intelligencePayload.data);
+  test.state.matchRoomTabs[pre.id] = 'teams';
+  const roomTeams = test.renderIntelligence(intelligencePayload.data);
+  test.state.matchRoomTabs[pre.id] = 'numbers';
+  const roomNumbers = test.renderIntelligence(intelligencePayload.data);
+  test.state.matchRoomTabs[pre.id] = 'verify';
+  const roomVerify = test.renderIntelligence(intelligencePayload.data);
   const renders = {
     dashboard: test.renderDashboard(), matches: test.renderMatchesView(), radar: test.renderRadarView(),
     news: test.renderNewsView(), standings: test.renderStandingsView(), favorites: test.renderFavoritesView(),
-    preDossier: test.renderIntelligence(intelligencePayload.data), postDossier: test.renderIntelligence(reviewPayload.data),
+    roomSummary, roomTeams, roomNumbers, roomVerify, postDossier: test.renderIntelligence(reviewPayload.data),
     fallback: test.renderFallbackDeepAnalysis(pre, analysisPayload.data, 'Errore simulato'),
     power: test.renderPowerAnalysis(analysisPayload.data)
   };
@@ -94,10 +102,14 @@ function createNode() {
     console.log(`✓ ${name.padEnd(12)} ${String(html.length).padStart(6)} caratteri`);
   }
 
-  if (!renders.preDossier.includes('Analisi approfondita') || renders.preDossier.indexOf('deep-dive') > renders.preDossier.indexOf('EVIDENZE CONSULTABILI')) throw new Error('Gerarchia Deep Analysis non valida');
-  if (!renders.preDossier.includes('AVAILABILITY INTELLIGENCE') || !renders.preDossier.includes('What Changed · storia della partita')) throw new Error('Availability Desk o storia match non renderizzati');
+  if (!renders.roomSummary.includes('MATCH CONTROL ROOM') || !renders.roomSummary.includes('MATCH READINESS GATE') || !renders.roomSummary.includes('EVIDENCE MAP')) throw new Error('Sintesi Control Room non valida');
+  if (!renders.roomTeams.includes('TACTICAL MATCHUP') || !renders.roomTeams.includes('AVAILABILITY INTELLIGENCE')) throw new Error('Area Squadre non raggruppata correttamente');
+  if (!renders.roomNumbers.includes('POWER MODEL 2.1') || !renders.roomNumbers.includes('roomPowerMount')) throw new Error('Area Numeri non valida');
+  if (!renders.roomVerify.includes('What Changed · storia della partita') || !renders.roomVerify.includes('Data Reliability Ledger') || !renders.roomVerify.includes('Fonti e news collegate')) throw new Error('Area Verifiche non valida');
   if (!renders.dashboard.includes('MODEL TRACK RECORD') || !renders.dashboard.includes('SOURCE HEALTH CENTER')) throw new Error('Track Record o Source Health Center non renderizzati');
-  if (!renders.postDossier.includes('REVIEW') || !renders.fallback.includes('COPERTURA RIDOTTA')) throw new Error('Review o fallback trasparente non renderizzato');
+  if (!renders.postDossier.includes('REVIEW') || !renders.postDossier.includes('Decisione chiusa') || !renders.fallback.includes('COPERTURA RIDOTTA')) throw new Error('Review adattiva o fallback trasparente non renderizzato');
+  const liveModel = test.renderPowerAnalysis({ ...analysisPayload.data, event: { ...analysisPayload.data.event, state: 'in', home: { ...analysisPayload.data.event.home, score: 1 }, away: { ...analysisPayload.data.event.away, score: 0 } } });
+  if (!liveModel.includes('Modello decisionale sospeso') || liveModel.includes('Probabilità 1-X-2')) throw new Error('Il modello rimane impropriamente attivo durante il live');
   if (!renders.matches.includes('Analisi profonda') && !renders.matches.includes('Analisi pronta') && !renders.matches.includes('Review pronta')) throw new Error('Indicatore Deep Analysis assente dalle partite');
 
   if (test.safeUrl('') !== '' || test.safeUrl('   ') !== '' || test.safeUrl('javascript:alert(1)') !== '') throw new Error('safeUrl accetta URL vuoti o pericolosi');
@@ -129,7 +141,7 @@ function createNode() {
   if (test.state.modelSnapshots['post-hoc-block']) throw new Error('Il Track Record accetta un output post-hoc');
 
   const css = fs.readFileSync('public/styles.css', 'utf8');
-  for (const marker of ['@media (max-width: 720px)', '@media (max-width: 420px)', 'prefers-reduced-motion', '.deep-dive.fallback', '.preseason-reading', '.operations-deck', '.availability-desk', '.match-history', '.deep-story p { margin: 0; color: var(--muted); font-size: 10.5px;']) {
+  for (const marker of ['@media (max-width: 720px)', '@media (max-width: 420px)', 'prefers-reduced-motion', '.deep-dive.fallback', '.preseason-reading', '.operations-deck', '.availability-desk', '.match-history', '.match-control-room', '.match-room-tabs', '.readiness-gate', '.evidence-map', '.deep-story p { margin: 0; color: var(--muted); font-size: 10.5px;']) {
     if (!css.includes(marker)) throw new Error(`Regola CSS mancante: ${marker}`);
   }
   console.log('Frontend test completato: viste, dossier, URL, fallback grafici e pre-season validi.');

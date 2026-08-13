@@ -1,4 +1,4 @@
-# VANTAGGIO 4.4.0 — Transparency & Availability Intelligence
+# VANTAGGIO 4.5.0 — Match Control Room
 
 Portale calcistico responsive in italiano che unisce calendario globale, live score, probabilità e **Match Intelligence** in un’identità ibrida esclusiva: regia broadcast, data room e magazine editoriale. Funziona senza API a pagamento, senza account utente e senza dipendenze npm.
 
@@ -11,7 +11,17 @@ Portale calcistico responsive in italiano che unisce calendario globale, live sc
 - **Classifiche / Table Lab**: capolista, distacco, miglior attacco/difesa, ritmo gol, PPG e lettura della corsa.
 - **Preferiti / My Matchroom**: countdown, prossimo evento, dossier consultati, alert e privacy locale.
 - **Scout Search**: ricerca trasversale di partite, squadre, competizioni e notizie con navigazione da tastiera.
-- **Match dossier**: Deep Research/Review è il primo contenuto; il Power Model 2.1 resta disponibile in un cassetto tecnico separato.
+- **Match dossier / Control Room**: un’unica architettura adattiva raggruppa Sintesi, Squadre, Numeri e Verifiche; il Power Model vive soltanto nell’area Numeri.
+
+## Match Control Room V4.5
+
+- **Quattro aree, nessun contenuto sparso**: Sintesi per la decisione, Squadre per tattica/calendario/lineup/availability, Numeri per Power Model e dati del torneo, Verifiche per fonti, What Changed, vuoti informativi e Reliability Ledger.
+- **Match Readiness Gate**: prima di qualsiasi segnale controlla formazioni, disponibilità, affidabilità complessiva, campione tecnico e freschezza. Può indicare Pronta, Cautela o Attendi senza trasformarsi in promessa di risultato.
+- **Evidence Map**: separa e conta fatti verificati, letture derivate, punti da verificare e segnalazioni superate dalle lineup ufficiali.
+- **Dossier adattivo**: pre-partita mostra il brief decisionale; durante il live sospende il modello e privilegia score e dati effettivi; dopo il finale chiude ogni consiglio e apre la review. Anche Radar e Power Picks selezionano soltanto eventi realmente pre-kickoff.
+- **Progressive disclosure controllata**: un solo livello di tab principali e un secondo livello esclusivamente nell’area Verifiche. Su Android la navigazione rimane sticky e scorrevole.
+- **Accessibilità**: tab con ruoli e stati ARIA, focus visibile, attivazione standard e navigazione con frecce, Home ed End.
+- La Sintesi pre-partita è stata ridotta da oltre 21.000 a circa 6.000 caratteri di markup nel test reale, senza eliminare i dettagli: sono stati ricollocati nell’area corretta.
 
 ## Transparency & Availability Intelligence V4.4
 
@@ -124,7 +134,7 @@ Le fonti possono essere parziali o cambiare formato. Il backend normalizza i dat
 - disponibilità FPL cache 30 minuti, injury feed 20 minuti, rassegna availability 15 minuti;
 - snapshot tecnici recenti: massimo tre eventi per squadra, cache 30 minuti;
 - endpoint leggeri per partite, classifiche, notizie e stato servizio;
-- asset statici con versionamento cache `4.4.0`; cambio data automatico a mezzanotte nel fuso Europe/Rome.
+- asset statici con versionamento cache `4.5.0`; cambio data automatico a mezzanotte nel fuso Europe/Rome.
 
 ## Pubblicazione con URL stabile
 
@@ -148,7 +158,7 @@ npm test
 npm run audit
 ```
 
-I test verificano homepage e asset V4.4.0, tutte le viste frontend, gerarchia dossier-first, fallback trasparente, Model Track Record rigorosamente pre-kickoff, Brier e riconciliazione, Source Health Center, Availability Intelligence, immagini mancanti, pre-season, richieste non valide, archivio globale di ieri, Deep Match Review, 16 classifiche, Power Model 2.1, Match Intelligence 1.2, Reliability Ledger e Team DNA. L'audit esteso contiene 107 controlli.
+I test verificano homepage e asset V4.5.0, tutte le viste frontend, le quattro aree della Match Control Room, Readiness Gate, Evidence Map, navigazione ARIA, adattamento pre/live/post, sospensione del modello durante il live, fallback trasparente, Model Track Record rigorosamente pre-kickoff, Source Health Center, Availability Intelligence, pre-season, richieste non valide, Deep Match Review, 16 classifiche, Power Model 2.1, Reliability Ledger e Team DNA. L'audit esteso contiene 112 controlli.
 
 ## Struttura
 

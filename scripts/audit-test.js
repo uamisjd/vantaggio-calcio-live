@@ -26,18 +26,23 @@ function noInvalidNumbers(value) {
 (async () => {
   const home = await request('/', 'text');
   check(home.response.status === 200, 'Homepage HTTP 200');
-  check(home.body.includes('V4.4') && home.body.includes('app.js?v=4.4.0'), 'Homepage V4.4.0 e cache key corrette');
+  check(home.body.includes('V4.5') && home.body.includes('app.js?v=4.5.0'), 'Homepage V4.5.0 e cache key corrette');
   check(home.response.headers.get('x-content-type-options') === 'nosniff', 'Header nosniff presente');
   check(home.response.headers.get('referrer-policy') === 'strict-origin-when-cross-origin', 'Referrer policy sicura presente');
 
   const [manifest, favicon, app, css, status] = await Promise.all([
-    request('/manifest.webmanifest'), request('/favicon.svg', 'text'), request('/app.js?v=4.4.0', 'text'),
-    request('/styles.css?v=4.4.0', 'text'), request('/api/status')
+    request('/manifest.webmanifest'), request('/favicon.svg', 'text'), request('/app.js?v=4.5.0', 'text'),
+    request('/styles.css?v=4.5.0', 'text'), request('/api/status')
   ]);
   check(manifest.response.status === 200 && manifest.body?.start_url === '/#dashboard' && manifest.body?.display === 'standalone', 'Manifest PWA valido');
   check(favicon.response.status === 200 && favicon.body.includes('<svg'), 'Favicon SVG valida');
   check(app.response.status === 200 && app.body.includes('renderFallbackDeepAnalysis'), 'Bundle frontend completo');
+  check(app.body.includes('MATCH CONTROL ROOM') && app.body.includes('MATCH READINESS GATE') && app.body.includes('EVIDENCE MAP'), 'Control Room, Readiness Gate ed Evidence Map presenti');
+  check(['summary', 'teams', 'numbers', 'verify'].every(tab => app.body.includes(`id: '${tab}'`)), 'Quattro aree del dossier presenti');
+  check(app.body.includes('role="tablist"') && app.body.includes('aria-selected=') && app.body.includes("['ArrowRight', 'ArrowLeft', 'Home', 'End']"), 'Tab Control Room accessibili da tastiera');
+  check(!app.body.includes('class="model-drawer"') && app.body.includes('id="roomPowerMount"'), 'Power Model raggruppato nell’area Numeri');
   check(css.response.status === 200 && css.body.includes('@media (max-width: 720px)'), 'CSS responsive servito');
+  check(css.body.includes('.match-room-tabs') && css.body.includes('.readiness-gate') && css.body.includes('.evidence-map'), 'Design system Control Room servito');
   check(app.response.headers.get('cache-control')?.includes('immutable') && css.response.headers.get('cache-control')?.includes('immutable'), 'Asset versionati serviti con cache immutabile');
   check(status.response.status === 200 && status.body?.ok && status.body.timezone === 'Europe/Rome', 'Status API e timezone validi');
   check(Array.isArray(status.body?.standingsLeagues) && status.body.standingsLeagues.length >= 12, 'Catalogo classifiche estese valido');
