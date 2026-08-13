@@ -10,6 +10,10 @@ const state = {
   matches: [],
   news: [],
   tables: {},
+  analyses: {},
+  powerPicks: [],
+  powerLoading: false,
+  coverage: { competitions: 0, globalCalendar: false },
   dataMeta: { matches: null, news: null },
   errors: {},
   loading: true,
@@ -166,11 +170,13 @@ async function loadInitial() {
   updateBadges();
   render();
   loadStandings(state.standingsLeague, false);
+  loadPowerPicks();
 }
 
 function applyMatches(payload) {
   const previous = Object.fromEntries(state.matches.map(match => [match.id, match.state]));
   state.matches = payload.data?.matches || [];
+  state.coverage = payload.data?.coverage || { competitions: new Set(state.matches.map(match => match.league.id)).size, globalCalendar: false };
   state.dataMeta.matches = payload.meta || null;
   delete state.errors.matches;
   state.matches.forEach(match => {
@@ -211,7 +217,11 @@ async function refreshAll(manual = false) {
   updateSyncStatus();
   updateBadges();
   render();
-  if (manual) toast(matches.status === 'fulfilled' ? 'Dati aggiornati correttamente' : 'Alcune fonti non rispondono', matches.status !== 'fulfilled');
+  if (manual) {
+    state.powerPicks = [];
+    loadPowerPicks();
+    toast(matches.status === 'fulfilled' ? 'Dati aggiornati correttamente' : 'Alcune fonti non rispondono', matches.status !== 'fulfilled');
+  }
 }
 
 async function loadStandings(leagueId, force = false) {
@@ -299,35 +309,70 @@ function radarMatches(limit = 20) {
     .slice(0, limit);
 }
 
+async function loadPowerPicks() {
+  if (state.powerLoading) return;
+  const ranked = radarMatches(30);
+  const todayFirst = ranked.filter(match => localDateKey(match.date) === state.today);
+  const candidates = [...todayFirst, ...ranked.filter(match => localDateKey(match.date) !== state.today)].slice(0, 5);
+  if (!candidates.length) return;
+  const signature = candidates.map(match => match.id).join(',');
+  if (state.powerPicks.signature === signature && state.powerPicks.length) return;
+  state.powerLoading = true;
+  if (state.currentView === 'dashboard') render();
+  const results = await Promise.allSettled(candidates.map(match => {
+    const key = `${match.league.id}:${match.id}`;
+    if (state.analyses[key]) return Promise.resolve({ match, analysis: state.analyses[key] });
+    return api(`/api/analysis?event=${encodeURIComponent(match.id)}&league=${encodeURIComponent(match.league.id)}`).then(payload => {
+      state.analyses[key] = payload.data;
+      return { match, analysis: payload.data };
+    });
+  }));
+  state.powerPicks = results.filter(item => item.status === 'fulfilled').map(item => item.value).sort((a, b) => {
+    const aScore = (a.analysis.signals?.[0]?.probability || 0) * (a.analysis.engine?.quality || 0);
+    const bScore = (b.analysis.signals?.[0]?.probability || 0) * (b.analysis.engine?.quality || 0);
+    return bScore - aScore;
+  }).slice(0, 4);
+  state.powerPicks.signature = signature;
+  state.powerLoading = false;
+  if (state.currentView === 'dashboard') render();
+}
+
+function powerPickItem(item, index) {
+  const signal = item.analysis.signals?.[0];
+  if (!signal) return radarItem(item.match, index);
+  return `<article class="power-pick" data-match="${escapeHtml(item.match.id)}"><span class="radar-rank">${String(index + 1).padStart(2, '0')}</span><div><strong>${escapeHtml(item.match.home.name)} — ${escapeHtml(item.match.away.name)}</strong><small>${escapeHtml(signal.label)} · qualità ${item.analysis.engine.quality}/100</small></div><b>${signal.probability}<small>%</small></b></article>`;
+}
+
 function renderDashboard() {
   const upcoming = filteredDashboardMatches();
   const radar = radarMatches(6);
-  const featured = radar[0] || upcoming[0];
+  const todayFeatured = state.matches.filter(match => isUpcoming(match) && localDateKey(match.date) === state.today).sort((a, b) => b.opportunity - a.opportunity);
+  const featured = todayFeatured[0] || radar[0] || upcoming[0];
   const live = state.matches.filter(match => match.state === 'in').length;
   const todayMatches = state.matches.filter(match => localDateKey(match.date) === state.today).length;
   const in48h = state.matches.filter(match => {
     const hours = (new Date(match.date).getTime() - Date.now()) / 3600000;
     return hours >= 0 && hours <= 48;
   }).length;
-  const availableSources = state.dataMeta.matches ? 7 - ((state.dataMeta.matches.sources || []).filter?.(item => !item.ok)?.length || 0) : 7;
+  const coveredCompetitions = state.coverage.competitions || new Set(state.matches.map(match => match.league.id)).size;
   return `<div class="view dashboard-view">
     ${renderHero(featured)}
     <section class="metric-grid" aria-label="Indicatori principali">
       ${metric('ball', live, 'Partite live', 'red')}
-      ${metric('clock', todayMatches, 'In calendario oggi', 'accent')}
+      ${metric('clock', todayMatches, 'Partite disponibili oggi', 'accent')}
       ${metric('radar', in48h, 'Nelle prossime 48h', 'blue')}
-      ${metric('shield', availableSources, 'Competizioni monitorate', '')}
+      ${metric('shield', coveredCompetitions, 'Competizioni coperte', '')}
     </section>
     <div class="dashboard-grid">
       <section class="section-card matches-card">
-        <header class="section-head"><div><h2>Prossime partite</h2><p>Orari locali e aggiornamento automatico</p></div><button class="section-link" data-view="matches">Calendario ${icon('chevron')}</button></header>
+        <header class="section-head"><div><h2>Oggi sul campo</h2><p>${todayMatches} partite oggi · poi i prossimi appuntamenti</p></div><button class="section-link" data-view="matches">Calendario ${icon('chevron')}</button></header>
         ${leagueFilters(state.dashboardLeague, 'dashboard-league')}
         ${state.errors.matches && !state.matches.length ? errorBlock(state.errors.matches, true) : (upcoming.length ? `<div class="match-list">${upcoming.slice(0, 7).map(matchRow).join('')}</div>` : emptyInline('Nessuna partita nel periodo selezionato'))}
       </section>
       <section class="section-card radar-card">
-        <header class="section-head"><div><h2>Match Radar</h2><p>Priorità calcolata su forma e contesto</p></div><button class="section-link" data-view="radar">Apri ${icon('chevron')}</button></header>
-        <div class="radar-list">${radar.length ? radar.slice(0, 5).map((match, index) => radarItem(match, index)).join('') : emptyInline('In attesa delle prossime partite')}</div>
-        <div class="radar-disclaimer">${icon('info')}<span>L’indice ordina le partite per interesse statistico. Non è una garanzia di vincita né una quota.</span></div>
+        <header class="section-head"><div><h2>Power Picks</h2><p>Segnali calcolati su dati profondi</p></div><button class="section-link" data-view="radar">Radar ${icon('chevron')}</button></header>
+        <div class="radar-list">${state.powerPicks.length ? state.powerPicks.map(powerPickItem).join('') : state.powerLoading ? `<div class="power-picks-loading"><i></i><i></i><i></i></div>` : (radar.length ? radar.slice(0, 5).map((match, index) => radarItem(match, index)).join('') : emptyInline('In attesa delle prossime partite'))}</div>
+        <div class="radar-disclaimer">${icon('info')}<span>Le percentuali sono stime del modello sui dati disponibili, non garanzie. Apri una partita per verificare campione e rischio.</span></div>
       </section>
     </div>
     <section class="news-section">
@@ -342,12 +387,14 @@ function renderHero(match) {
     return `<section class="hero-card"><div class="hero-copy"><span class="hero-kicker"><i></i>INTELLIGENZA CALCISTICA</span><h1>Il calcio,<br><em>letto meglio.</em></h1><p>Risultati, notizie e classifiche in un’unica esperienza ordinata. I dati si aggiorneranno appena le fonti torneranno disponibili.</p><button class="hero-button" data-view="news">Esplora le notizie ${icon('arrow')}</button></div></section>`;
   }
   const status = statusMarkup(match);
+  const power = state.analyses[`${match.league.id}:${match.id}`];
+  const powerSignal = power?.signals?.[0];
   return `<section class="hero-card">
-    <div class="hero-copy"><span class="hero-kicker"><i></i>AGGIORNAMENTO AUTOMATICO ATTIVO</span><h1>Il calcio,<br><em>letto meglio.</em></h1><p>Partite, forma, classifiche e notizie in un solo posto. Il Match Radar evidenzia gli incontri più interessanti con un metodo trasparente e responsabile.</p><button class="hero-button" data-view="radar">Apri Match Radar ${icon('arrow')}</button></div>
+    <div class="hero-copy"><span class="hero-kicker"><i></i>POWER MODEL 2.0 · DATI LIVE</span><h1>Il calcio,<br><em>letto a fondo.</em></h1><p>Forma reale, medie gol, precedenti, probabilità 1-X-2, Over/Under, entrambe a segno e qualità del campione. Apri una partita per l’analisi completa.</p><button class="hero-button" data-match="${escapeHtml(match.id)}">Analisi potente ${icon('arrow')}</button></div>
     <button class="hero-feature" data-match="${escapeHtml(match.id)}" aria-label="Analizza ${escapeHtml(match.home.name)} contro ${escapeHtml(match.away.name)}">
       <div class="hero-feature-top"><span class="hero-feature-label">IN EVIDENZA · ${escapeHtml(match.league.label)}</span><span class="score-ring" style="--score:${match.opportunity}"><span>${match.opportunity}</span></span></div>
       <div class="hero-fixture"><div class="hero-team">${teamLogo(match.home, 'hero-logo')}<strong>${escapeHtml(match.home.name)}</strong></div><div class="hero-vs"><strong>${escapeHtml(status.main)}</strong><span>${match.state === 'pre' ? escapeHtml(displayDate(match.date)) : escapeHtml(status.sub)}</span></div><div class="hero-team">${teamLogo(match.away, 'hero-logo')}<strong>${escapeHtml(match.away.name)}</strong></div></div>
-      <div class="hero-insight">${icon('radar')}<div><strong>${escapeHtml(match.insight.label)}</strong><span>${escapeHtml(match.insight.text)}</span></div></div>
+      <div class="hero-insight">${icon('radar')}<div><strong>${powerSignal ? `${escapeHtml(powerSignal.label)} · ${powerSignal.probability}%` : escapeHtml(match.insight.label)}</strong><span>${powerSignal ? `Power Model · qualità dati ${power.engine.quality}/100 · apri per tutti i dettagli` : escapeHtml(match.insight.text)}</span></div></div>
     </button>
   </section>`;
 }
@@ -368,7 +415,7 @@ function matchRow(match) {
   const status = statusMarkup(match);
   const favorite = state.favorites.has(match.id);
   return `<article class="match-row" data-match="${escapeHtml(match.id)}">
-    <div class="match-meta"><span class="match-league"><i style="--league:${escapeHtml(match.league.accent)}"></i>${escapeHtml(match.league.label)}</span><span class="match-date">${escapeHtml(displayDate(match.date))}</span></div>
+    <div class="match-meta"><span class="match-league"><i style="--league:${escapeHtml(match.league.accent)}"></i>${escapeHtml(match.league.label)}<b class="power-mini">POWER</b></span><span class="match-date">${escapeHtml(displayDate(match.date))}</span></div>
     <div class="match-team home">${teamLogo(match.home)}<div><strong>${escapeHtml(match.home.name)}</strong>${formMarkup(match.home.form)}</div></div>
     <div class="match-center ${status.className}"><span class="match-time ${match.state === 'in' ? 'live-pill' : ''}">${escapeHtml(status.main)}</span><span class="match-status">${escapeHtml(status.sub)}</span></div>
     <div class="match-team away">${teamLogo(match.away)}<div><strong>${escapeHtml(match.away.name)}</strong>${formMarkup(match.away.form)}</div></div>
@@ -400,7 +447,8 @@ function renderMatchesView() {
     .filter(match => state.selectedDate !== 'all' || isUpcoming(match))
     .sort((a, b) => new Date(a.date) - new Date(b.date));
   const groups = Object.groupBy ? Object.groupBy(matches, match => localDateKey(match.date)) : matches.reduce((acc, match) => ((acc[localDateKey(match.date)] ||= []).push(match), acc), {});
-  const leagueOptions = [`<option value="all">Tutte le competizioni</option>`, ...state.leagues.map(league => `<option value="${league.id}" ${state.matchLeague === league.id ? 'selected' : ''}>${escapeHtml(league.label)}</option>`)].join('');
+  const availableLeagues = [...new Map([...state.leagues, ...state.matches.map(match => match.league)].map(league => [league.id, league])).values()].sort((a, b) => a.label.localeCompare(b.label, 'it'));
+  const leagueOptions = [`<option value="all">Tutte le competizioni</option>`, ...availableLeagues.map(league => `<option value="${league.id}" ${state.matchLeague === league.id ? 'selected' : ''}>${escapeHtml(league.label)}</option>`)].join('');
   return `<div class="view matches-view">
     ${viewHeader('CALENDARIO', 'Tutte le partite', 'Live score, orari italiani e calendario dei principali campionati europei.', `<button class="button" id="viewRefresh">${icon('refresh')} Aggiorna</button>`)}
     <section class="controls-card"><div class="date-strip"><button class="date-button ${state.selectedDate === 'all' ? 'active' : ''}" data-date="all"><span>Vista</span><strong>Tutte</strong></button>${dates.map(date => `<button class="date-button ${state.selectedDate === date ? 'active' : ''}" data-date="${date}"><span>${escapeHtml(new Intl.DateTimeFormat('it-IT', { timeZone: 'Europe/Rome', weekday: 'short' }).format(new Date(`${date}T12:00:00Z`)))}</span><strong>${date.slice(8)}</strong></button>`).join('')}</div><select class="select-control" id="matchLeagueSelect" aria-label="Filtra competizione">${leagueOptions}</select></section>
@@ -411,8 +459,8 @@ function renderMatchesView() {
 function renderRadarView() {
   const matches = radarMatches(30);
   return `<div class="view radar-view">
-    ${viewHeader('ANALISI RESPONSABILE', 'Match Radar', 'Una graduatoria trasparente basata su importanza della competizione, forma recente, prossimità e richiamo dell’incontro.')}
-    <section class="radar-hero"><div><h2>Non indovina il futuro. Ordina meglio i segnali.</h2><p>L’indice 0–100 aiuta a individuare le partite che meritano più attenzione. Apri un incontro per verificare trend, rischio e disponibilità dei dati. Non usiamo quote né promettiamo risultati.</p></div><div class="radar-hero-visual">${icon('radar')}</div></section>
+    ${viewHeader('POWER MODEL 2.0', 'Match Radar', 'Le partite più interessanti, con analisi avanzata su forma, gol, precedenti, probabilità e qualità dei dati.')}
+    <section class="radar-hero"><div><h2>Dal calendario a una lettura completa.</h2><p>L’indice ordina gli incontri da analizzare. Aprendo ogni partita il Power Model calcola 1-X-2, gol attesi, Over/Under, Goal/No Goal, segnali protetti, precedenti e rischio. Il risultato resta informativo e non garantisce alcun esito.</p></div><div class="radar-hero-visual">${icon('radar')}</div></section>
     ${matches.length ? `<section class="radar-table"><header class="radar-table-head"><span>#</span><span>Partita</span><span>Lettura</span><span>Rischio</span><span>Indice</span><span></span></header>${matches.map((match, index) => `<article class="radar-table-row" data-match="${escapeHtml(match.id)}"><span class="radar-position">${index + 1}</span><div class="radar-match-main"><strong>${escapeHtml(match.home.name)} — ${escapeHtml(match.away.name)}</strong><span>${escapeHtml(match.league.label)} · ${escapeHtml(displayDate(match.date))} · ${escapeHtml(fmtTime.format(new Date(match.date)))}</span></div><span class="insight-badge">${escapeHtml(match.insight.label)}</span><span class="risk-badge ${match.insight.risk === 'Alto' ? 'high' : match.insight.risk === 'Basso' ? 'low' : ''}"><i></i>${escapeHtml(match.insight.risk)}</span><span class="radar-value">${match.opportunity}<small>/100</small></span>${icon('chevron')}</article>`).join('')}</section>` : emptyState('radar', 'Radar in attesa', 'Nessun incontro futuro disponibile nel periodo monitorato.')}
   </div>`;
 }
@@ -469,28 +517,92 @@ function openMatch(id) {
   const match = findMatch(id);
   if (!match) return;
   const status = statusMarkup(match);
-  const homeForm = formScore(match.home.form);
-  const awayForm = formScore(match.away.form);
   const favorite = state.favorites.has(match.id);
   const modal = $('#matchModal');
+  modal.dataset.eventId = match.id;
   modal.style.setProperty('--league-color', match.league.accent || '#c8ff52');
   modal.innerHTML = `<button class="modal-close" data-close-modal aria-label="Chiudi">${icon('x')}</button>
     <header class="modal-hero"><span class="modal-competition"><i></i>${escapeHtml(match.league.label)} ${match.round ? `· ${escapeHtml(match.round)}` : ''}</span><div class="modal-fixture"><div class="modal-team">${teamLogo(match.home, 'modal-logo')}<strong>${escapeHtml(match.home.name)}</strong></div><div class="modal-score"><strong>${escapeHtml(status.main)}</strong><span>${escapeHtml(status.sub)}</span></div><div class="modal-team">${teamLogo(match.away, 'modal-logo')}<strong>${escapeHtml(match.away.name)}</strong></div></div></header>
-    <div class="modal-body"><div class="modal-meta-grid"><div class="modal-meta"><span>Data e ora</span><strong>${escapeHtml(displayDate(match.date, true))} · ${escapeHtml(fmtTime.format(new Date(match.date)))}</strong></div><div class="modal-meta"><span>Stadio</span><strong title="${escapeHtml(match.venue)}">${escapeHtml(match.venue)}</strong></div><div class="modal-meta"><span>Indice Radar</span><strong>${match.opportunity}/100</strong></div></div>
-      <section class="analysis-box"><div class="analysis-box-head"><span>${escapeHtml(match.insight.label)}</span><strong>Rischio ${escapeHtml(match.insight.risk)}</strong></div><p>${escapeHtml(match.insight.text)}</p></section>
-      <section class="form-comparison"><h3>Forma recente disponibile</h3><div class="form-team-row"><span>${escapeHtml(match.home.name)}</span><div class="form-bar"><i style="width:${homeForm}%"></i></div><strong>${match.home.form || 'n/d'}</strong></div><div class="form-team-row"><span>${escapeHtml(match.away.name)}</span><div class="form-bar"><i style="width:${awayForm}%"></i></div><strong>${match.away.form || 'n/d'}</strong></div></section>
-      <div class="modal-note">${icon('info')}<span>Questa lettura usa esclusivamente segnali descrittivi disponibili nel feed. Non considera infortuni dell’ultimo minuto, formazioni ufficiali o quote e non garantisce alcun esito.</span></div>
+    <div class="modal-body"><div class="modal-meta-grid"><div class="modal-meta"><span>Data e ora</span><strong>${escapeHtml(displayDate(match.date, true))} · ${escapeHtml(fmtTime.format(new Date(match.date)))}</strong></div><div class="modal-meta"><span>Stadio</span><strong title="${escapeHtml(match.venue)}">${escapeHtml(match.venue)}</strong></div><div class="modal-meta"><span>Indice interesse</span><strong>${match.opportunity}/100</strong></div></div>
+      <div id="advancedAnalysis">${analysisLoading()}</div>
       <div class="modal-actions"><button class="button ${favorite ? '' : 'primary'}" data-favorite="${escapeHtml(match.id)}">${icon('star')} ${favorite ? 'Rimuovi dai salvati' : 'Salva partita'}</button><button class="button" data-close-modal>Chiudi</button></div>
     </div>`;
   $('#modalLayer').hidden = false;
   document.body.style.overflow = 'hidden';
   setTimeout(() => $('.modal-close', modal)?.focus(), 20);
+  loadAnalysis(match);
+}
+
+function analysisLoading() {
+  return `<section class="power-loading"><div class="power-loading-head"><span class="power-mark">POWER</span><strong>Sto costruendo l’analisi completa…</strong></div><div class="power-skeleton"><i></i><i></i><i></i></div><p>Forma, precedenti, distribuzione gol e consenso 1-X-2.</p></section>`;
+}
+
+async function loadAnalysis(match, force = false) {
+  const key = `${match.league.id}:${match.id}`;
+  const root = $('#advancedAnalysis');
+  if (!root) return;
+  if (state.analyses[key] && !force) {
+    root.innerHTML = renderPowerAnalysis(state.analyses[key]);
+    return;
+  }
+  try {
+    const payload = await api(`/api/analysis?event=${encodeURIComponent(match.id)}&league=${encodeURIComponent(match.league.id)}${force ? '&fresh=1' : ''}`);
+    state.analyses[key] = payload.data;
+    if ($('#matchModal')?.dataset.eventId === match.id && $('#advancedAnalysis')) $('#advancedAnalysis').innerHTML = renderPowerAnalysis(payload.data);
+  } catch (error) {
+    if ($('#matchModal')?.dataset.eventId === match.id && $('#advancedAnalysis')) {
+      $('#advancedAnalysis').innerHTML = `<section class="power-error">${icon('info')}<div><strong>Analisi avanzata non disponibile</strong><p>${escapeHtml(error.message)}. Restano validi calendario, forma sintetica e dati live.</p></div></section>`;
+    }
+  }
+}
+
+function qualityLabel(value) {
+  if (value >= 80) return 'Alta';
+  if (value >= 60) return 'Buona';
+  if (value >= 40) return 'Parziale';
+  return 'Limitata';
+}
+
+function probabilityBar(label, value, tone = '') {
+  return `<div class="probability-item ${tone}"><div><span>${escapeHtml(label)}</span><strong>${value}%</strong></div><i><b style="width:${clampClient(value, 0, 100)}%"></b></i></div>`;
+}
+
+function clampClient(value, min, max) {
+  return Math.max(min, Math.min(max, Number(value) || 0));
+}
+
+function recentTeamPanel(recent) {
+  const events = recent.events || [];
+  return `<section class="recent-team-panel"><header><div>${teamLogo(recent.team, 'power-team-logo')}<span><strong>${escapeHtml(recent.team.name)}</strong><small>Ultime ${recent.played} disponibili</small></span></div><b>${recent.wins}V · ${recent.draws}P · ${recent.losses}S</b></header><div class="recent-kpis"><span><b>${recent.avgGoalsFor ?? '–'}</b> fatti</span><span><b>${recent.avgGoalsAgainst ?? '–'}</b> subiti</span><span><b>${recent.bttsRate ?? '–'}${recent.bttsRate == null ? '' : '%'}</b> Goal</span><span><b>${recent.over25Rate ?? '–'}${recent.over25Rate == null ? '' : '%'}</b> O2.5</span></div><div class="recent-results">${events.length ? events.map(event => `<div class="recent-result"><span class="result-chip ${event.result.toLowerCase()}">${event.result}</span><div><strong>${escapeHtml(event.opponent)}</strong><small>${escapeHtml(event.venue)} · ${escapeHtml(event.competition)}</small></div><b>${event.goalsFor}–${event.goalsAgainst}</b></div>`).join('') : '<p>Dati recenti non disponibili.</p>'}</div></section>`;
+}
+
+function renderPowerAnalysis(data) {
+  const quality = data.engine?.quality || 0;
+  const signals = data.signals || [];
+  const primary = signals[0];
+  const marketOutcome = data.market?.outcome ? {
+    home: Math.round(data.market.outcome.home * 100), draw: Math.round(data.market.outcome.draw * 100), away: Math.round(data.market.outcome.away * 100)
+  } : null;
+  const h2hRows = (data.h2h?.events || []).slice(0, 5).map(event => `<div class="h2h-row"><span>${escapeHtml(displayDate(event.date))}</span><div><strong>${escapeHtml(event.home.name)}</strong><b>${event.home.score}–${event.away.score}</b><strong>${escapeHtml(event.away.name)}</strong></div></div>`).join('');
+  return `<section class="power-analysis">
+    <header class="power-title"><div><span class="power-mark">POWER MODEL 2.0</span><h3>Analisi quantitativa</h3></div><div class="quality-score" style="--quality:${quality}"><span><b>${quality}</b><small>qualità ${qualityLabel(quality)}</small></span></div></header>
+    ${primary ? `<article class="primary-signal"><div><span>SEGNALE PIÙ FORTE</span><h4>${escapeHtml(primary.label)}</h4><p>${escapeHtml(primary.reason)}</p></div><strong>${primary.probability}<small>%</small></strong><i class="risk-tag ${String(data.assessment?.risk || '').toLowerCase()}">Rischio ${escapeHtml(data.assessment?.risk || 'n/d')}</i></article>` : ''}
+    <section class="power-block"><header><h4>Probabilità 1-X-2</h4><span>Consenso statistico${data.market?.outcome ? ' + mercato' : ''}</span></header><div class="probabilities">${probabilityBar(data.event.home.name, data.probabilities.home, 'home')}${probabilityBar('Pareggio', data.probabilities.draw, 'draw')}${probabilityBar(data.event.away.name, data.probabilities.away, 'away')}</div><div class="model-note">Solo modello: ${data.statisticalProbabilities.home}% · ${data.statisticalProbabilities.draw}% · ${data.statisticalProbabilities.away}%</div></section>
+    <div class="goal-grid"><article><span>Gol attesi</span><strong>${data.expectedGoals.total}</strong><small>${escapeHtml(data.event.home.name)} ${data.expectedGoals.home} · ${escapeHtml(data.event.away.name)} ${data.expectedGoals.away}</small></article><article><span>Risultato modale</span><strong>${escapeHtml(data.goals.likelyScore)}</strong><small>singolo punteggio più probabile</small></article><article><span>Over 1,5</span><strong>${data.goals.over15}%</strong><small>almeno due gol</small></article><article><span>Over 2,5</span><strong>${data.goals.over25}%</strong><small>almeno tre gol</small></article><article><span>Goal</span><strong>${data.goals.btts}%</strong><small>segnano entrambe</small></article><article><span>Under 3,5</span><strong>${data.goals.under35}%</strong><small>massimo tre gol</small></article></div>
+    ${signals.length ? `<section class="power-block"><header><h4>Scenari da valutare</h4><span>ordinati per robustezza</span></header><div class="signal-list">${signals.map((signal, index) => `<article><span>${String(index + 1).padStart(2, '0')}</span><div><strong>${escapeHtml(signal.label)}</strong><small>${escapeHtml(signal.reason)}</small></div><b>${signal.probability}%</b></article>`).join('')}</div></section>` : ''}
+    <section class="power-block"><header><h4>Forma e produzione gol</h4><span>${data.engine.sampleSize} osservazioni complessive</span></header><div class="recent-grid">${recentTeamPanel(data.recent.home)}${recentTeamPanel(data.recent.away)}</div></section>
+    ${(data.assessment?.findings || []).length ? `<section class="evidence-box"><h4>Cosa pesa nell’analisi</h4>${data.assessment.findings.map(text => `<p>${icon('chevron')}<span>${escapeHtml(text)}</span></p>`).join('')}${data.assessment.seasonTransition ? `<div class="season-warning">${icon('info')} Nuova stagione: la classifica è ancora poco significativa, quindi il modello pesa maggiormente risultati recenti e precedenti.</div>` : ''}</section>` : ''}
+    ${data.h2h?.total ? `<section class="power-block"><header><h4>Precedenti diretti</h4><span>${data.h2h.total} incontri · ${data.h2h.homeWins}V casa · ${data.h2h.draws}P · ${data.h2h.awayWins}V ospite</span></header><div class="h2h-list">${h2hRows}</div></section>` : ''}
+    ${marketOutcome ? `<section class="market-box"><div><span>CONSENSO MERCATO SENZA MARGINE</span><strong>${escapeHtml(data.market.provider)}</strong></div><div><b>1 ${marketOutcome.home}%</b><b>X ${marketOutcome.draw}%</b><b>2 ${marketOutcome.away}%</b>${data.market.totals ? `<b>Linea gol ${data.market.totals.line}</b>` : ''}</div></section>` : ''}
+    <div class="modal-note">${icon('info')}<span>${escapeHtml(data.methodology)} Non considera formazioni ufficiali o eventi dell’ultimo minuto e non garantisce alcun risultato. 18+.</span></div>
+  </section>`;
 }
 
 function openInfo() {
   const modal = $('#matchModal');
+  delete modal.dataset.eventId;
   modal.style.removeProperty('--league-color');
-  modal.innerHTML = `<button class="modal-close" data-close-modal aria-label="Chiudi">${icon('x')}</button><header class="modal-hero"><span class="modal-competition"><i></i>TRASPARENZA</span><div style="position:relative;z-index:1;margin-top:24px"><h2 style="margin:0 0 8px;font-size:26px">Dati gratuiti, metodo chiaro.</h2><p style="margin:0;color:rgba(255,255,255,.65);font-size:11px;line-height:1.5">Nessun abbonamento e nessuna chiave API a pagamento.</p></div></header><div class="modal-body"><section class="analysis-box"><div class="analysis-box-head"><span>Fonti attive</span><strong>Feed pubblici</strong></div><p>Partite e classifiche: feed pubblico ESPN. Notizie: ANSA Calcio, Football Italia ed ESPN. Ogni articolo apre la fonte originale.</p></section><section class="form-comparison"><h3>Come si aggiorna</h3><p style="color:var(--muted);font-size:10px;line-height:1.6">Le partite vengono ricontrollate ogni 90 secondi mentre il sito è aperto; le notizie ogni pochi minuti. In caso di errore temporaneo, viene mantenuta l’ultima risposta valida in cache.</p><h3 style="margin-top:18px">Come funziona il Radar</h3><p style="color:var(--muted);font-size:10px;line-height:1.6">L’indice combina livello della competizione, forma recente disponibile, prossimità temporale e interesse generale. Non usa quote, non è un modello predittivo e non promette vincite.</p></section><div class="modal-note">${icon('shield')}<span>Preferiti, tema e alert sono salvati localmente nel browser. Questo MVP non richiede account e non invia dati personali.</span></div><div class="modal-actions"><button class="button primary" data-close-modal>Ho capito</button></div></div>`;
+  modal.innerHTML = `<button class="modal-close" data-close-modal aria-label="Chiudi">${icon('x')}</button><header class="modal-hero"><span class="modal-competition"><i></i>TRASPARENZA</span><div style="position:relative;z-index:1;margin-top:24px"><h2 style="margin:0 0 8px;font-size:26px">Dati gratuiti, metodo chiaro.</h2><p style="margin:0;color:rgba(255,255,255,.65);font-size:11px;line-height:1.5">Nessun abbonamento e nessuna chiave API a pagamento.</p></div></header><div class="modal-body"><section class="analysis-box"><div class="analysis-box-head"><span>Fonti attive</span><strong>Feed pubblici</strong></div><p>Partite, forma, precedenti e classifiche: feed pubblico ESPN. Notizie: ANSA Calcio, Football Italia ed ESPN. Ogni articolo apre la fonte originale.</p></section><section class="form-comparison"><h3>Come si aggiorna</h3><p style="color:var(--muted);font-size:10px;line-height:1.6">Le partite vengono ricontrollate ogni 90 secondi mentre il sito è aperto; le notizie ogni pochi minuti. In caso di errore temporaneo, viene mantenuta l’ultima risposta valida in cache.</p><h3 style="margin-top:18px">Come funziona il Power Model 2.0</h3><p style="color:var(--muted);font-size:10px;line-height:1.6">Combina distribuzione di Poisson sui gol recenti, forma, precedenti, fattore campo e consenso di mercato senza margine quando presente. Se la nuova classifica non è significativa, il sistema lo segnala e pesa maggiormente gli altri dati. Nessun esito è garantito.</p></section><div class="modal-note">${icon('shield')}<span>Preferiti, tema e alert sono salvati localmente nel browser. Il sito non richiede account e non invia dati personali.</span></div><div class="modal-actions"><button class="button primary" data-close-modal>Ho capito</button></div></div>`;
   $('#modalLayer').hidden = false;
   document.body.style.overflow = 'hidden';
 }

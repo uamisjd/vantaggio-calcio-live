@@ -1,4 +1,4 @@
-# VANTAGGIO
+# VANTAGGIO 2.0
 
 Portale calcistico responsive in italiano con partite, live score, Match Radar, notizie, classifiche, preferiti e alert locali. Funziona senza API a pagamento e senza dipendenze npm.
 
@@ -8,8 +8,12 @@ Portale calcistico responsive in italiano con partite, live score, Match Radar, 
 - Calendario dei principali campionati europei
 - Aggiornamento automatico ogni 90 secondi
 - Live score e stato degli incontri
+- Calendario globale filtrato sulle competizioni più rilevanti, oltre ai cinque principali campionati
 - Match Radar con indice trasparente 0–100
-- Dettaglio partita, forma recente e profilo di rischio
+- Power Model 2.0 su ogni partita: probabilità 1-X-2, gol attesi, risultato modale, Over/Under e Goal/No Goal
+- Ultime cinque partite con medie gol, rendimento e frequenze statistiche
+- Precedenti diretti, classifica e consenso di mercato senza margine quando disponibili
+- Segnali ordinati per robustezza, qualità del campione e profilo di rischio
 - News aggregate con link alla fonte originale
 - Classifiche di Serie A, Premier League, LaLiga, Bundesliga e Ligue 1
 - Ricerca globale (`Ctrl/Cmd + K`)

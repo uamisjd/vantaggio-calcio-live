@@ -24,8 +24,14 @@ async function get(path, type = 'json') {
   const standings = await get('/api/standings?league=ita.1');
   if (!standings.ok || !Array.isArray(standings.data.table)) throw new Error('Standings API non valida');
 
+  const analyzable = matches.data.matches.find(item => item.state !== 'post');
+  if (!analyzable) throw new Error('Nessuna partita analizzabile');
+  const analysis = await get(`/api/analysis?event=${encodeURIComponent(analyzable.id)}&league=${encodeURIComponent(analyzable.league.id)}`);
+  if (!analysis.ok || !analysis.data.probabilities || !Array.isArray(analysis.data.signals)) throw new Error('Power Analysis API non valida');
+
   console.log(`✓ Homepage servita`);
-  console.log(`✓ ${matches.data.matches.length} partite da ${matches.data.sources.filter(item => item.ok).length} feed competizione`);
+  console.log(`✓ ${matches.data.matches.length} partite in ${matches.data.coverage?.competitions || 0} competizioni`);
+  console.log(`✓ Power Model operativo su ${analyzable.home.name}–${analyzable.away.name}`);
   console.log(`✓ ${news.data.articles.length} notizie da ${news.data.sources.filter(item => item.ok).length} fonti`);
   console.log(`✓ ${standings.data.table.length} righe classifica Serie A`);
   console.log('Smoke test completato senza errori.');

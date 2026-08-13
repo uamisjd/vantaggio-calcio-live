@@ -23,7 +23,30 @@ const BIG_CLUBS = new Set([
   'internazionale', 'inter milan', 'ac milan', 'juventus', 'napoli', 'roma', 'lazio', 'atalanta',
   'manchester city', 'manchester united', 'liverpool', 'arsenal', 'chelsea', 'tottenham hotspur',
   'real madrid', 'barcelona', 'atlético madrid', 'atletico madrid', 'bayern munich', 'borussia dortmund',
-  'paris saint-germain', 'paris fc', 'marseille', 'benfica', 'fc porto', 'sporting cp'
+  'paris saint-germain', 'paris fc', 'marseille', 'benfica', 'fc porto', 'sporting cp',
+  'inter miami cf', 'américa', 'cruz azul', 'besiktas', 'partizan belgrade', 'santos', 'flamengo',
+  'palmeiras', 'river plate', 'boca juniors', 'al hilal', 'al nassr'
+]);
+
+// Competizioni rilevanti presenti nel calendario globale ESPN. La chiave è
+// l'identificativo numerico incluso nell'UID degli eventi globali.
+const GLOBAL_COMPETITIONS = {
+  '19425': { id: 'concacaf.leagues.cup', label: 'Leagues Cup', country: 'Nord America', accent: '#44d6bd', weight: 19 },
+  '19887': { id: 'uefa.europa_qual', label: 'Qualificazioni Europa League', country: 'Europa', accent: '#ff9f43', weight: 21 },
+  '20221': { id: 'uefa.europa.conf_qual', label: 'Qualificazioni Conference', country: 'Europa', accent: '#6bdc7d', weight: 17 },
+  '783': { id: 'conmebol.libertadores', label: 'Copa Libertadores', country: 'Sud America', accent: '#d9b85b', weight: 23 },
+  '5454': { id: 'conmebol.sudamericana', label: 'Copa Sudamericana', country: 'Sud America', accent: '#ee7d45', weight: 19 },
+  '21231': { id: 'ksa.1', label: 'Saudi Pro League', country: 'Arabia Saudita', accent: '#62ca74', weight: 12 },
+  '3932': { id: 'mex.2', label: 'Liga de Expansión MX', country: 'Messico', accent: '#d65c70', weight: 9 },
+  '8313': { id: 'col.1', label: 'Primera A Colombia', country: 'Colombia', accent: '#f3c849', weight: 11 },
+  '22947': { id: 'pan.1', label: 'Liga Panamense', country: 'Panama', accent: '#5d91e8', weight: 8 }
+};
+
+const ANALYSIS_LEAGUES = new Set([
+  ...Object.keys(LEAGUES),
+  ...Object.values(GLOBAL_COMPETITIONS).map(item => item.id),
+  'uefa.champions_qual', 'uefa.super_cup', 'uefa.europa.conf', 'ita.coppa_italia',
+  'eng.2', 'ita.2', 'por.1', 'ned.1', 'tur.1', 'bel.1', 'sco.1', 'usa.1', 'mex.1', 'arg.1', 'bra.1'
 ]);
 
 const memoryCache = new Map();
@@ -180,26 +203,50 @@ async function getLeagueMatches(league, from, to) {
   return (json.events || []).map(event => normalizeEvent(event, league));
 }
 
+function eventLeagueNumericId(event) {
+  return String(event.uid || '').match(/~l:([^~]+)/)?.[1] || '';
+}
+
+async function getGlobalMatches(date) {
+  const compactDate = date.replaceAll('-', '');
+  const url = `https://site.api.espn.com/apis/site/v2/sports/soccer/all/scoreboard?dates=${compactDate}&limit=1000`;
+  const json = await fetchJson(url, 14_000);
+  return (json.events || [])
+    .map(event => ({ event, league: GLOBAL_COMPETITIONS[eventLeagueNumericId(event)] }))
+    .filter(item => item.league)
+    .map(item => normalizeEvent(item.event, item.league));
+}
+
 async function getMatches({ leagueId = 'all', from, to, force = false }) {
   const selected = leagueId === 'all' ? Object.values(LEAGUES) : [LEAGUES[leagueId]].filter(Boolean);
   if (!selected.length) throw new Error('Competizione non valida');
-  const key = `matches:${selected.map(l => l.id).join(',')}:${from}:${to}`;
+  const key = `matches:v2:${selected.map(l => l.id).join(',')}:${from}:${to}`;
   return cached(key, 60_000, async () => {
-    const results = await Promise.allSettled(selected.map(league => getLeagueMatches(league, from, to)));
-    const matches = [];
+    const jobs = selected.map(league => ({ id: league.id, type: 'league', promise: getLeagueMatches(league, from, to) }));
+    if (leagueId === 'all') {
+      const today = romeDate();
+      [today, addDays(today, 1)].filter(date => date >= from && date <= to).forEach(date => {
+        jobs.push({ id: `global:${date}`, type: 'global', promise: getGlobalMatches(date) });
+      });
+    }
+    const results = await Promise.allSettled(jobs.map(job => job.promise));
+    const matchesById = new Map();
     const sources = [];
     results.forEach((result, index) => {
-      const id = selected[index].id;
+      const job = jobs[index];
       if (result.status === 'fulfilled') {
-        matches.push(...result.value);
-        sources.push({ id, ok: true, count: result.value.length });
+        result.value.forEach(match => {
+          const localDate = romeDate(new Date(match.date));
+          if (localDate >= from && localDate <= to) matchesById.set(match.id, match);
+        });
+        sources.push({ id: job.id, ok: true, count: result.value.length, type: job.type });
       } else {
-        sources.push({ id, ok: false, count: 0, error: result.reason?.message || 'Errore' });
+        sources.push({ id: job.id, ok: false, count: 0, type: job.type, error: result.reason?.message || 'Errore' });
       }
     });
+    const matches = [...matchesById.values()].sort((a, b) => new Date(a.date) - new Date(b.date));
     if (!matches.length && sources.every(item => !item.ok)) throw new Error('Le fonti sportive non sono raggiungibili');
-    matches.sort((a, b) => new Date(a.date) - new Date(b.date));
-    return { matches, sources };
+    return { matches, sources, coverage: { competitions: new Set(matches.map(item => item.league.id)).size, globalCalendar: true } };
   }, force);
 }
 
@@ -319,6 +366,297 @@ async function getNews(force = false) {
   }, force);
 }
 
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
+
+function round1(value) {
+  return Math.round(Number(value || 0) * 10) / 10;
+}
+
+function americanImplied(odds) {
+  const value = Number(odds);
+  if (!Number.isFinite(value) || value === 0) return null;
+  return value < 0 ? (-value) / ((-value) + 100) : 100 / (value + 100);
+}
+
+function normalizeRecentTeam(block = {}) {
+  const teamId = String(block.team?.id || '');
+  const events = (block.events || []).map(event => {
+    const homeScore = Number(event.homeTeamScore || 0);
+    const awayScore = Number(event.awayTeamScore || 0);
+    const isHome = String(event.homeTeamId) === teamId;
+    const goalsFor = isHome ? homeScore : awayScore;
+    const goalsAgainst = isHome ? awayScore : homeScore;
+    return {
+      id: String(event.id || ''),
+      date: event.gameDate || '',
+      opponent: event.opponent?.displayName || 'Avversario',
+      opponentLogo: event.opponentLogo || event.opponent?.logo || '',
+      venue: isHome ? 'Casa' : 'Trasferta',
+      goalsFor,
+      goalsAgainst,
+      result: goalsFor > goalsAgainst ? 'V' : goalsFor < goalsAgainst ? 'S' : 'P',
+      competition: event.leagueAbbreviation || event.competitionName || ''
+    };
+  }).filter(event => event.date);
+  const played = events.length;
+  const wins = events.filter(item => item.result === 'V').length;
+  const draws = events.filter(item => item.result === 'P').length;
+  const losses = events.filter(item => item.result === 'S').length;
+  const goalsFor = events.reduce((sum, item) => sum + item.goalsFor, 0);
+  const goalsAgainst = events.reduce((sum, item) => sum + item.goalsAgainst, 0);
+  const btts = events.filter(item => item.goalsFor > 0 && item.goalsAgainst > 0).length;
+  const over25 = events.filter(item => item.goalsFor + item.goalsAgainst >= 3).length;
+  return {
+    team: {
+      id: teamId,
+      name: block.team?.displayName || 'Squadra',
+      abbreviation: block.team?.abbreviation || '',
+      logo: block.team?.logo || block.team?.logos?.[0]?.href || ''
+    },
+    played, wins, draws, losses,
+    goalsFor,
+    goalsAgainst,
+    avgGoalsFor: played ? round1(goalsFor / played) : null,
+    avgGoalsAgainst: played ? round1(goalsAgainst / played) : null,
+    pointsPerGame: played ? round1((wins * 3 + draws) / played) : null,
+    bttsRate: played ? Math.round((btts / played) * 100) : null,
+    over25Rate: played ? Math.round((over25 / played) * 100) : null,
+    cleanSheets: events.filter(item => item.goalsAgainst === 0).length,
+    failedToScore: events.filter(item => item.goalsFor === 0).length,
+    events
+  };
+}
+
+function normalizeH2H(series = {}, homeTeamId, awayTeamId) {
+  const events = (series.events || []).map(event => {
+    const home = event.competitors?.find(item => item.homeAway === 'home') || event.competitors?.[0] || {};
+    const away = event.competitors?.find(item => item.homeAway === 'away') || event.competitors?.[1] || {};
+    return {
+      id: String(event.id || ''),
+      date: event.date || '',
+      home: { id: String(home.team?.id || ''), name: home.team?.displayName || 'Casa', logo: home.team?.logo || '', score: Number(home.score || 0) },
+      away: { id: String(away.team?.id || ''), name: away.team?.displayName || 'Ospite', logo: away.team?.logo || '', score: Number(away.score || 0) }
+    };
+  }).filter(item => item.date);
+  let homeWins = 0;
+  let awayWins = 0;
+  let draws = 0;
+  events.forEach(event => {
+    const homeGoals = event.home.id === homeTeamId ? event.home.score : event.away.score;
+    const awayGoals = event.home.id === awayTeamId ? event.home.score : event.away.score;
+    if (homeGoals > awayGoals) homeWins += 1;
+    else if (awayGoals > homeGoals) awayWins += 1;
+    else draws += 1;
+  });
+  return { summary: series.summary || '', total: events.length, homeWins, awayWins, draws, events };
+}
+
+function standingFor(summary, teamId) {
+  const entries = (summary.standings?.groups || []).flatMap(group => group.standings?.entries || []);
+  const entry = entries.find(item => String(item.id) === String(teamId));
+  if (!entry) return null;
+  const stat = names => {
+    const list = Array.isArray(names) ? names : [names];
+    const item = (entry.stats || []).find(value => list.includes(value.name) || list.includes(value.abbreviation));
+    return item ? Number(item.value ?? item.displayValue ?? 0) : 0;
+  };
+  return {
+    rank: stat(['rank', 'R']), played: stat(['gamesPlayed', 'GP']),
+    wins: stat(['wins', 'W']), draws: stat(['ties', 'D']), losses: stat(['losses', 'L']),
+    points: stat(['points', 'P'])
+  };
+}
+
+function poisson(k, lambda) {
+  let factorial = 1;
+  for (let i = 2; i <= k; i += 1) factorial *= i;
+  return Math.exp(-lambda) * Math.pow(lambda, k) / factorial;
+}
+
+function statisticalModel(homeRecent, awayRecent) {
+  const hasHome = homeRecent.played >= 2;
+  const hasAway = awayRecent.played >= 2;
+  const homeFor = hasHome ? homeRecent.goalsFor / homeRecent.played : 1.35;
+  const homeAgainst = hasHome ? homeRecent.goalsAgainst / homeRecent.played : 1.2;
+  const awayFor = hasAway ? awayRecent.goalsFor / awayRecent.played : 1.15;
+  const awayAgainst = hasAway ? awayRecent.goalsAgainst / awayRecent.played : 1.35;
+  const expectedHome = clamp(((homeFor + awayAgainst) / 2) * 1.08, 0.35, 3.4);
+  const expectedAway = clamp(((awayFor + homeAgainst) / 2) * 0.94, 0.3, 3.2);
+  let homeWin = 0;
+  let draw = 0;
+  let awayWin = 0;
+  let btts = 0;
+  let over15 = 0;
+  let over25 = 0;
+  let under35 = 0;
+  let totalMass = 0;
+  let likely = { home: 0, away: 0, probability: 0 };
+  for (let home = 0; home <= 8; home += 1) {
+    for (let away = 0; away <= 8; away += 1) {
+      const probability = poisson(home, expectedHome) * poisson(away, expectedAway);
+      totalMass += probability;
+      if (home > away) homeWin += probability;
+      else if (home === away) draw += probability;
+      else awayWin += probability;
+      if (home > 0 && away > 0) btts += probability;
+      if (home + away >= 2) over15 += probability;
+      if (home + away >= 3) over25 += probability;
+      if (home + away <= 3) under35 += probability;
+      if (probability > likely.probability) likely = { home, away, probability };
+    }
+  }
+  const normalize = value => value / totalMass;
+  return {
+    expectedGoals: { home: round1(expectedHome), away: round1(expectedAway), total: round1(expectedHome + expectedAway) },
+    outcome: { home: normalize(homeWin), draw: normalize(draw), away: normalize(awayWin) },
+    goals: { btts: normalize(btts), over15: normalize(over15), over25: normalize(over25), under35: normalize(under35) },
+    likelyScore: `${likely.home}-${likely.away}`
+  };
+}
+
+function marketModel(summary) {
+  const item = summary.pickcenter?.[0] || summary.odds?.[0];
+  if (!item) return null;
+  const home = americanImplied(item.homeTeamOdds?.moneyLine);
+  const draw = americanImplied(item.drawOdds?.moneyLine);
+  const away = americanImplied(item.awayTeamOdds?.moneyLine);
+  let outcome = null;
+  if (home && draw && away) {
+    const total = home + draw + away;
+    outcome = { home: home / total, draw: draw / total, away: away / total };
+  }
+  const over = americanImplied(item.overOdds);
+  const under = americanImplied(item.underOdds);
+  let totals = null;
+  if (over && under) {
+    const total = over + under;
+    totals = { line: Number(item.overUnder), over: over / total, under: under / total };
+  }
+  return {
+    available: Boolean(outcome || totals),
+    provider: item.provider?.name || 'Mercato',
+    updated: 'Snapshot disponibile nel feed',
+    outcome,
+    totals,
+    raw: {
+      home: item.homeTeamOdds?.moneyLine ?? null,
+      draw: item.drawOdds?.moneyLine ?? null,
+      away: item.awayTeamOdds?.moneyLine ?? null
+    }
+  };
+}
+
+function percentageTriplet(values) {
+  const raw = [values.home, values.draw, values.away].map(value => Math.max(0, value || 0));
+  const total = raw.reduce((sum, value) => sum + value, 0) || 1;
+  const rounded = raw.map(value => Math.round((value / total) * 100));
+  rounded[0] += 100 - rounded.reduce((sum, value) => sum + value, 0);
+  return { home: rounded[0], draw: rounded[1], away: rounded[2] };
+}
+
+function buildSignals(probabilities, goals, homeName, awayName) {
+  const candidates = [
+    { code: '1X', label: `${homeName} o pareggio`, probability: probabilities.home + probabilities.draw, reason: 'Copertura del fattore campo e del pareggio' },
+    { code: 'X2', label: `${awayName} o pareggio`, probability: probabilities.away + probabilities.draw, reason: 'Copertura del trend ospite e del pareggio' },
+    { code: 'O1.5', label: 'Più di 1,5 gol', probability: goals.over15, reason: 'Distribuzione dei gol recenti delle due squadre' },
+    { code: 'U3.5', label: 'Meno di 3,5 gol', probability: goals.under35, reason: 'Scenario protetto contro punteggi molto larghi' },
+    { code: 'GG', label: 'Entrambe a segno', probability: goals.btts, reason: 'Frequenza realizzativa e vulnerabilità recenti' },
+    { code: 'NG', label: 'Almeno una non segna', probability: 1 - goals.btts, reason: 'Probabilità combinata di almeno una porta inviolata' }
+  ];
+  if (probabilities.home >= 0.52) candidates.push({ code: '1', label: `Vittoria ${homeName}`, probability: probabilities.home, reason: 'Vantaggio nel consenso statistico 1-X-2' });
+  if (probabilities.away >= 0.52) candidates.push({ code: '2', label: `Vittoria ${awayName}`, probability: probabilities.away, reason: 'Vantaggio nel consenso statistico 1-X-2' });
+  return candidates
+    .map(item => ({ ...item, probability: Math.round(item.probability * 100) }))
+    .filter(item => item.probability >= 58)
+    .sort((a, b) => b.probability - a.probability)
+    .filter((item, index, all) => all.findIndex(other => other.code === item.code) === index)
+    .slice(0, 4);
+}
+
+async function fetchEventSummary(eventId, leagueId) {
+  const primary = `https://site.api.espn.com/apis/site/v2/sports/soccer/${encodeURIComponent(leagueId)}/summary?event=${encodeURIComponent(eventId)}`;
+  try {
+    const data = await fetchJson(primary, 12_000);
+    if (data.header?.competitions?.length) return data;
+    throw new Error('Riepilogo vuoto');
+  } catch (error) {
+    const fallback = `https://site.api.espn.com/apis/site/v2/sports/soccer/all/summary?event=${encodeURIComponent(eventId)}`;
+    const data = await fetchJson(fallback, 12_000);
+    if (!data.header?.competitions?.length) throw error;
+    return data;
+  }
+}
+
+async function getAnalysis(eventId, leagueId, force = false) {
+  if (!/^\d{5,15}$/.test(String(eventId))) throw new Error('Evento non valido');
+  if (!ANALYSIS_LEAGUES.has(leagueId)) throw new Error('Competizione non supportata per l’analisi avanzata');
+  return cached(`analysis:v2:${leagueId}:${eventId}`, 5 * 60_000, async () => {
+    const summary = await fetchEventSummary(eventId, leagueId);
+    const competition = summary.header?.competitions?.[0] || {};
+    const homeEntry = competition.competitors?.find(item => item.homeAway === 'home') || competition.competitors?.[0] || {};
+    const awayEntry = competition.competitors?.find(item => item.homeAway === 'away') || competition.competitors?.[1] || {};
+    const homeTeam = {
+      id: String(homeEntry.team?.id || homeEntry.id || ''),
+      name: homeEntry.team?.shortDisplayName || homeEntry.team?.displayName || 'Casa',
+      logo: homeEntry.team?.logos?.[0]?.href || ''
+    };
+    const awayTeam = {
+      id: String(awayEntry.team?.id || awayEntry.id || ''),
+      name: awayEntry.team?.shortDisplayName || awayEntry.team?.displayName || 'Ospite',
+      logo: awayEntry.team?.logos?.[0]?.href || ''
+    };
+    const recentBlocks = summary.lastFiveGames || [];
+    const homeRecent = normalizeRecentTeam(recentBlocks.find(item => String(item.team?.id) === homeTeam.id) || recentBlocks[0] || { team: homeTeam });
+    const awayRecent = normalizeRecentTeam(recentBlocks.find(item => String(item.team?.id) === awayTeam.id) || recentBlocks[1] || { team: awayTeam });
+    const h2h = normalizeH2H(summary.seasonseries?.[0] || {}, homeTeam.id, awayTeam.id);
+    const standings = { home: standingFor(summary, homeTeam.id), away: standingFor(summary, awayTeam.id) };
+    const market = marketModel(summary);
+    const model = statisticalModel(homeRecent, awayRecent);
+    const consensus = market?.outcome ? {
+      home: model.outcome.home * 0.58 + market.outcome.home * 0.42,
+      draw: model.outcome.draw * 0.58 + market.outcome.draw * 0.42,
+      away: model.outcome.away * 0.58 + market.outcome.away * 0.42
+    } : model.outcome;
+    const probabilities = percentageTriplet(consensus);
+    const probabilityDecimals = { home: probabilities.home / 100, draw: probabilities.draw / 100, away: probabilities.away / 100 };
+    const recentSamples = homeRecent.played + awayRecent.played;
+    const quality = clamp(Math.round(Math.min(50, recentSamples * 5) + Math.min(20, h2h.total * 4) + (market?.available ? 20 : 0) + (standings.home && standings.away ? 10 : 0)), 18, 95);
+    const signals = buildSignals(probabilityDecimals, model.goals, homeTeam.name, awayTeam.name);
+    const strongest = signals[0] || { probability: Math.max(probabilities.home, probabilities.draw, probabilities.away), label: 'Esito ancora aperto' };
+    const risk = quality < 45 || strongest.probability < 64 ? 'Alto' : strongest.probability >= 78 && quality >= 70 ? 'Contenuto' : 'Medio';
+    const findings = [];
+    if (homeRecent.played) findings.push(`${homeTeam.name}: ${homeRecent.avgGoalsFor} gol fatti e ${homeRecent.avgGoalsAgainst} subiti di media nelle ultime ${homeRecent.played}.`);
+    if (awayRecent.played) findings.push(`${awayTeam.name}: ${awayRecent.avgGoalsFor} gol fatti e ${awayRecent.avgGoalsAgainst} subiti di media nelle ultime ${awayRecent.played}.`);
+    if (h2h.total) findings.push(`Precedenti disponibili: ${h2h.homeWins}-${h2h.draws}-${h2h.awayWins} dal punto di vista casa-pareggi-ospite.`);
+    if (market?.totals) findings.push(`Il feed di mercato colloca la linea gol a ${market.totals.line}.`);
+    const seasonTransition = (standings.home?.played === 0 && standings.away?.played === 0);
+    return {
+      event: { id: String(eventId), leagueId, date: competition.date || '', home: homeTeam, away: awayTeam },
+      engine: { version: '2.0', name: 'VANTAGGIO Power Model', generatedAt: nowIso(), quality, sampleSize: recentSamples + h2h.total },
+      probabilities,
+      statisticalProbabilities: percentageTriplet(model.outcome),
+      expectedGoals: model.expectedGoals,
+      goals: {
+        over15: Math.round(model.goals.over15 * 100),
+        over25: Math.round(model.goals.over25 * 100),
+        under35: Math.round(model.goals.under35 * 100),
+        btts: Math.round(model.goals.btts * 100),
+        noBtts: Math.round((1 - model.goals.btts) * 100),
+        likelyScore: model.likelyScore
+      },
+      signals,
+      assessment: { risk, strongestSignal: strongest.label, strongestProbability: strongest.probability, findings, seasonTransition },
+      recent: { home: homeRecent, away: awayRecent },
+      h2h,
+      standings,
+      market,
+      methodology: 'Modello Poisson sui gol recenti, forma, precedenti e consenso di mercato quando disponibile. Le fonti possono avere ritardi o campioni incompleti.'
+    };
+  }, force);
+}
+
 function jsonResponse(res, status, payload) {
   const body = JSON.stringify(payload);
   res.writeHead(status, {
@@ -407,6 +745,13 @@ const server = http.createServer(async (req, res) => {
         const force = requestUrl.searchParams.get('fresh') === '1';
         const result = await getNews(force);
         return jsonResponse(res, 200, { ok: true, data: result.value, meta: { fetchedAt: result.fetchedAt, stale: result.stale } });
+      }
+      if (pathname === '/api/analysis') {
+        const eventId = requestUrl.searchParams.get('event') || '';
+        const leagueId = requestUrl.searchParams.get('league') || '';
+        const force = requestUrl.searchParams.get('fresh') === '1';
+        const result = await getAnalysis(eventId, leagueId, force);
+        return jsonResponse(res, 200, { ok: true, data: result.value, meta: { fetchedAt: result.fetchedAt, stale: result.stale, cache: result.cache } });
       }
       return jsonResponse(res, 404, { ok: false, error: 'Endpoint non trovato' });
     } catch (error) {
