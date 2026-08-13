@@ -132,7 +132,7 @@ function createNode() {
   test.state.tables['ita.1'] = originalTable;
 
   const modelMatch = { ...pre, id: 'strict-model-test', state: 'pre', date: new Date(Date.now() + 86400000).toISOString(), home: { ...pre.home, score: 0 }, away: { ...pre.away, score: 0 } };
-  test.archivePreKickoffModel(modelMatch, { ...analysisPayload.data, probabilities: { home: 55, draw: 25, away: 20 } });
+  test.archivePreKickoffModel(modelMatch, { ...analysisPayload.data, event: { ...analysisPayload.data.event, state: 'pre', date: modelMatch.date }, probabilities: { home: 55, draw: 25, away: 20 } });
   if (!test.state.modelSnapshots[modelMatch.id] || new Date(test.state.modelSnapshots[modelMatch.id].capturedAt) >= new Date(modelMatch.date)) throw new Error('Snapshot pre-kickoff non congelato correttamente');
   test.reconcileModelSnapshots([{ ...modelMatch, state: 'post', home: { ...modelMatch.home, score: 2 }, away: { ...modelMatch.away, score: 0 } }]);
   const track = test.modelTrackStats();
