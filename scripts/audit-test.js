@@ -26,13 +26,13 @@ function noInvalidNumbers(value) {
 (async () => {
   const home = await request('/', 'text');
   check(home.response.status === 200, 'Homepage HTTP 200');
-  check(home.body.includes('V4.7') && home.body.includes('app.js?v=4.7.0'), 'Homepage V4.7.0 e cache key corrette');
+  check(home.body.includes('V4.8') && home.body.includes('app.js?v=4.8.0'), 'Homepage V4.8.0 e cache key corrette');
   check(home.response.headers.get('x-content-type-options') === 'nosniff', 'Header nosniff presente');
   check(home.response.headers.get('referrer-policy') === 'strict-origin-when-cross-origin', 'Referrer policy sicura presente');
 
   const [manifest, favicon, app, css, status] = await Promise.all([
-    request('/manifest.webmanifest'), request('/favicon.svg', 'text'), request('/app.js?v=4.7.0', 'text'),
-    request('/styles.css?v=4.7.0', 'text'), request('/api/status')
+    request('/manifest.webmanifest'), request('/favicon.svg', 'text'), request('/app.js?v=4.8.0', 'text'),
+    request('/styles.css?v=4.8.0', 'text'), request('/api/status')
   ]);
   check(manifest.response.status === 200 && manifest.body?.start_url === '/#dashboard' && manifest.body?.display === 'standalone', 'Manifest PWA valido');
   check(favicon.response.status === 200 && favicon.body.includes('<svg'), 'Favicon SVG valida');
@@ -41,7 +41,11 @@ function noInvalidNumbers(value) {
   check(app.body.includes('PRE-MATCH TOTAL INTELLIGENCE') && app.body.includes('prematchTotalIntelligence') && app.body.includes('data-prematch-jump'), 'Manifesto Pre-Match Total Intelligence presente');
   check(app.body.includes('contextDateConflict') && app.body.includes('Metadato contraddittorio'), 'Contraddizioni fra fase e data dichiarate');
   check(app.body.includes('PRE-MATCH WINDOW') && app.body.includes('DOSSIER PRE-MATCH') && !app.body.includes('LIVE PULSE') && !app.body.includes('LIVE CONTROL'), 'Dashboard e calendario centrati sul prematch');
-  check(!app.body.includes('function notifyLive') && !app.body.includes("addChange('live'") && app.body.includes('Analisi live disattivata'), 'Live limitato allo score senza segnali o notifiche');
+  check(!app.body.includes('function notifyLive') && !app.body.includes("addChange('live'") && app.body.includes('Analisi live disattivata'), 'Nessun segnale, notifica o analisi ricalcolata durante il live');
+  check(app.body.includes('PRE-MATCH VAULT') && app.body.includes('vantaggio:prematchVault:v1') && app.body.includes('archivedPrematchData(match)'), 'Pre-Match Vault locale e dossier congelato presenti');
+  check(app.body.includes('Fotografia al salvataggio prematch') && app.body.includes('non descrive la situazione live') && app.body.includes('Timeline non osservata prima del kickoff'), 'Timestamp ed evidenze archiviate non presentate come ricerca corrente');
+  check(app.body.includes("match.state !== 'pre'") && app.body.includes('Date.now() >= kickoffMs') && app.body.includes("archiveMode: 'prematch-live'"), 'Vault protetto dal backfill post-kickoff');
+  check(app.body.includes('XI INTELLIGENCE') && app.body.includes('lineupIntel(data.lineups'), 'XI Intelligence visibile nel Control Room');
   check(app.body.includes('minutes > 0 && minutes <= 65') && app.body.includes('Finestra pre-match chiusa'), 'Nessun ricontrollo dossier dopo il kickoff programmato');
   check(app.body.includes('SIGNAL LIFECYCLE') && app.body.includes('captureSignalLifecycle') && app.body.includes("'T-60', 'T-30', 'T-10'"), 'Signal Lifecycle e checkpoint pre-kickoff presenti');
   check(app.body.includes('vantaggio:signalLifecycle:v1') && app.body.includes("match.state !== 'pre'") && app.body.includes('now.getTime() >= kickoffMs'), 'Signal Lifecycle locale e protezione post-hoc presenti');
@@ -52,6 +56,7 @@ function noInvalidNumbers(value) {
   check(css.body.includes('.match-room-tabs') && css.body.includes('.readiness-gate') && css.body.includes('.evidence-map'), 'Design system Control Room servito');
   check(css.body.includes('.signal-lifecycle') && css.body.includes('.lifecycle-card'), 'Timeline Signal Lifecycle responsive servita');
   check(css.body.includes('.prematch-total-intelligence') && css.body.includes('.prematch-manifest') && css.body.includes('.score-only-live'), 'Design system Pre-Match Total Intelligence servito');
+  check(css.body.includes('.xi-intelligence') && css.body.includes('.xi-team-grid') && css.body.includes('.prematch-vault-banner'), 'Design responsive XI Intelligence e Pre-Match Vault servito');
   check(app.response.headers.get('cache-control')?.includes('immutable') && css.response.headers.get('cache-control')?.includes('immutable'), 'Asset versionati serviti con cache immutabile');
   check(status.response.status === 200 && status.body?.ok && status.body.timezone === 'Europe/Rome', 'Status API e timezone validi');
   check(Array.isArray(status.body?.standingsLeagues) && status.body.standingsLeagues.length >= 12, 'Catalogo classifiche estese valido');
@@ -87,7 +92,12 @@ function noInvalidNumbers(value) {
     const probabilitySum = p?.probabilities ? p.probabilities.home + p.probabilities.draw + p.probabilities.away : 0;
     check(Math.abs(probabilitySum - 100) <= 1, `Probabilità 1-X-2 coerenti: ${match.league.id}`);
     check(noInvalidNumbers(power.body), `Power Model senza numeri invalidi: ${match.league.id}`);
-    check(intel.response.status === 200 && intel.body?.ok && i?.engine?.version === '1.2', `Match Intelligence valida: ${match.league.id}`);
+    check(intel.response.status === 200 && intel.body?.ok && i?.engine?.version === '1.3', `Match Intelligence valida: ${match.league.id}`);
+    const xi = i?.lineupIntelligence;
+    check(Array.isArray(xi?.teams) && xi.teams.length === 2 && ['ufficiale', 'probabili_parziali', 'non_disponibile'].includes(xi.status), `XI Intelligence presente: ${match.league.id}`);
+    check(xi?.teams?.every(team => ['ufficiale', 'probabile', 'non_disponibile'].includes(team.mode) && Number.isFinite(team.confidence) && Number.isFinite(team.strength) && Number.isFinite(team.continuity)), `Punteggi XI distinti e validi: ${match.league.id}`);
+    check(xi?.teams?.every(team => team.mode === 'non_disponibile' || team.selected?.length === 11), `Probabile/ufficiale completa o non pubblicata: ${match.league.id}`);
+    check(xi?.teams?.every(team => team.importantMissing?.every(player => player.category && player.evidence?.length && Number.isFinite(player.importance))), `Assenze importanti documentate: ${match.league.id}`);
     check(Array.isArray(i?.availability?.teams) && i.availability.teams.length === 2 && Array.isArray(i.availability.sources) && Number.isFinite(i.availability.score), `Availability Intelligence valida: ${match.league.id}`);
     check(['pre', 'post'].includes(i?.deepDive?.mode) && Array.isArray(i?.deepDive?.paragraphs) && i.deepDive.paragraphs.length > 0, `Deep Analysis presente: ${match.league.id}`);
     check(Number.isFinite(i?.reliability?.overall) && Array.isArray(i?.reliability?.items) && i.reliability.items.length >= 5, `Reliability Ledger valido: ${match.league.id}`);
@@ -99,6 +109,9 @@ function noInvalidNumbers(value) {
   check(review.response.status === 200 && review.body?.data?.deepDive?.mode === 'post', 'Deep Match Review post-partita valida');
   check(review.body?.data?.event?.home?.score === 2 && review.body?.data?.event?.away?.score === 1, 'Risultato storico non alterato');
   check(!JSON.stringify(review.body).includes('statisticalProbabilities'), 'Nessuna probabilità live riciclata nella review');
+  const officialXi = review.body?.data?.lineupIntelligence;
+  check(officialXi?.status === 'ufficiale' && officialXi.teams?.every(team => team.mode === 'ufficiale' && team.confidence === 100 && team.selected?.length === 11), 'XI ufficiali distinti e completi');
+  check(officialXi?.teams?.flatMap(team => team.omissions || []).every(item => ['in panchina', 'non a referto', 'infortunio', 'indisponibile', 'squalifica', 'dubbio'].includes(item.status)), 'Panchina e non a referto distinti nelle omissioni');
 
   const dnaMatch = upcoming[0];
   const dna = await request(`/api/team-dna?team=${encodeURIComponent(dnaMatch.home.id)}&league=${encodeURIComponent(dnaMatch.league.id)}&name=${encodeURIComponent(dnaMatch.home.name)}`);

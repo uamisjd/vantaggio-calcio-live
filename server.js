@@ -757,18 +757,22 @@ function normalizeTeamLeaders(summary) {
 }
 
 function normalizeLineups(summary) {
+  const normalizePlayer = player => ({
+    id: String(player.athlete?.id || player.id || ''),
+    name: player.athlete?.displayName || player.displayName || 'Giocatore',
+    shortName: player.athlete?.shortName || player.shortName || player.athlete?.displayName || '',
+    jersey: player.jersey || player.athlete?.jersey || '',
+    position: player.position?.abbreviation || player.athlete?.position?.abbreviation || '',
+    starter: Boolean(player.starter)
+  });
   const teams = (summary.rosters || []).map(block => {
-    const players = block.roster || block.athletes || [];
-    const starters = players.filter(player => player.starter).map(player => ({
-      id: String(player.athlete?.id || player.id || ''),
-      name: player.athlete?.displayName || player.displayName || 'Giocatore',
-      shortName: player.athlete?.shortName || player.shortName || player.athlete?.displayName || '',
-      jersey: player.jersey || player.athlete?.jersey || '',
-      position: player.position?.abbreviation || player.athlete?.position?.abbreviation || ''
-    }));
+    const players = (block.roster || block.athletes || []).map(normalizePlayer);
+    const starters = players.filter(player => player.starter);
+    const substitutes = players.filter(player => !player.starter);
     return {
       side: block.homeAway || '', teamId: String(block.team?.id || ''),
-      teamName: block.team?.displayName || 'Squadra', formation: block.formation || '', starters
+      teamName: block.team?.displayName || 'Squadra', formation: block.formation || '',
+      starters, substitutes, squadSize: players.length
     };
   });
   const official = teams.length === 2 && teams.every(team => team.starters.length >= 11);
@@ -929,20 +933,24 @@ async function getPastMatchSnapshot(event, teamId) {
   const result = await cached(key, 30 * 60_000, async () => {
     const summary = await fetchJson(`https://site.api.espn.com/apis/site/v2/sports/soccer/all/summary?event=${encodeURIComponent(event.id)}`, 14_000);
     const block = (summary.boxscore?.teams || []).find(item => String(item.team?.id) === String(teamId));
-    if (!block || !(block.statistics || []).length) return null;
+    const lineup = normalizeLineups(summary).teams.find(item => String(item.teamId) === String(teamId));
+    const metricsAvailable = Boolean(block && (block.statistics || []).length);
+    if (!metricsAvailable && !lineup?.starters?.length) return null;
     return {
       eventId: String(event.id), date: event.date || '', opponent: event.opponent || '',
       result: event.result || '', score: `${event.goalsFor}-${event.goalsAgainst}`,
+      metricsAvailable,
+      lineup: lineup ? { formation: lineup.formation || '', starters: lineup.starters, substitutes: lineup.substitutes || [] } : null,
       metrics: {
-        possession: statFromTeamBlock(block, 'possessionPct'),
-        shots: statFromTeamBlock(block, 'totalShots'),
-        shotsOnTarget: statFromTeamBlock(block, 'shotsOnTarget'),
-        corners: statFromTeamBlock(block, 'wonCorners'),
-        passAccuracy: statFromTeamBlock(block, 'passPct'),
-        clearances: statFromTeamBlock(block, 'totalClearance'),
-        tackles: statFromTeamBlock(block, 'totalTackles'),
-        yellowCards: statFromTeamBlock(block, 'yellowCards'),
-        redCards: statFromTeamBlock(block, 'redCards')
+        possession: metricsAvailable ? statFromTeamBlock(block, 'possessionPct') : null,
+        shots: metricsAvailable ? statFromTeamBlock(block, 'totalShots') : null,
+        shotsOnTarget: metricsAvailable ? statFromTeamBlock(block, 'shotsOnTarget') : null,
+        corners: metricsAvailable ? statFromTeamBlock(block, 'wonCorners') : null,
+        passAccuracy: metricsAvailable ? statFromTeamBlock(block, 'passPct') : null,
+        clearances: metricsAvailable ? statFromTeamBlock(block, 'totalClearance') : null,
+        tackles: metricsAvailable ? statFromTeamBlock(block, 'totalTackles') : null,
+        yellowCards: metricsAvailable ? statFromTeamBlock(block, 'yellowCards') : null,
+        redCards: metricsAvailable ? statFromTeamBlock(block, 'redCards') : null
       }
     };
   });
@@ -955,7 +963,7 @@ function averageMetric(snapshots, key) {
 }
 
 function buildTacticalProfile(teamName, snapshots, recent) {
-  const valid = snapshots.filter(Boolean);
+  const valid = snapshots.filter(item => item && item.metricsAvailable !== false);
   const metrics = {
     possession: averageMetric(valid, 'possession'),
     shots: averageMetric(valid, 'shots'),
@@ -1303,27 +1311,37 @@ function sameClubName(a, b) {
 }
 
 async function getPremierLeagueAvailability(force = false) {
-  return cached('availability:fpl:v1', 30 * 60_000, async () => {
+  return cached('availability:fpl:v2', 30 * 60_000, async () => {
     const fetchedAt = nowIso();
     const payload = await fetchJson('https://fantasy.premierleague.com/api/bootstrap-static/', 16_000);
     const teams = new Map((payload.teams || []).map(team => [Number(team.id), team]));
-    const players = (payload.elements || []).filter(player => player.status !== 'a' || player.news).map(player => {
+    const positionMap = { 1: 'GK', 2: 'D', 3: 'M', 4: 'F' };
+    const squadPlayers = (payload.elements || []).map(player => {
       const team = teams.get(Number(player.team));
-      const text = String(player.news || 'Stato non disponibile').trim();
-      let category = 'indisponibile';
-      if (/has joined|transferr|permanent|on loan|loaned/.test(text.toLowerCase())) category = 'fuori rosa / trasferito';
-      else if (player.status === 's' || /suspend|squalif/.test(text.toLowerCase())) category = 'squalifica';
-      else if (player.status === 'd') category = 'dubbio';
-      else if (/injur|infortun|knock|hamstring|knee|ankle|groin|back|illness/.test(text.toLowerCase())) category = 'infortunio';
+      const text = String(player.news || '').trim();
+      let category = '';
+      if (player.status !== 'a' || text) {
+        category = 'indisponibile';
+        if (/has joined|transferr|permanent|on loan|loaned/.test(text.toLowerCase())) category = 'fuori rosa / trasferito';
+        else if (player.status === 's' || /suspend|squalif/.test(text.toLowerCase())) category = 'squalifica';
+        else if (player.status === 'd') category = 'dubbio';
+        else if (/injur|infortun|knock|hamstring|knee|ankle|groin|back|illness/.test(text.toLowerCase())) category = 'infortunio';
+      }
       return {
         id: String(player.id), player: player.web_name || `${player.first_name || ''} ${player.second_name || ''}`.trim(),
-        teamName: team?.name || '', teamCode: team?.short_name || '', category,
+        fullName: `${player.first_name || ''} ${player.second_name || ''}`.trim(),
+        teamName: team?.name || '', teamCode: team?.short_name || '', position: positionMap[Number(player.element_type)] || '', category,
         statusCode: player.status, chance: player.chance_of_playing_next_round,
-        detail: text, updatedAt: player.news_added || '', source: 'Fantasy Premier League ufficiale', tier: 2,
-        reliability: player.status === 'd' ? 'media' : 'forte'
+        detail: text || (player.status === 'a' ? 'Disponibile nel dataset FPL' : 'Stato non disponibile'),
+        updatedAt: player.news_added || '', source: 'Fantasy Premier League ufficiale', tier: 2,
+        reliability: player.status === 'd' ? 'media' : 'forte',
+        minutes: Number(player.minutes || 0), starts: Number(player.starts || 0), totalPoints: Number(player.total_points || 0),
+        goals: Number(player.goals_scored || 0), assists: Number(player.assists || 0),
+        selectedBy: Number(player.selected_by_percent || 0), form: Number(player.form || 0)
       };
     });
-    return { available: true, fetchedAt, players };
+    const players = squadPlayers.filter(player => player.statusCode !== 'a' || player.category);
+    return { available: true, fetchedAt, players, squadPlayers };
   }, force);
 }
 
@@ -1428,6 +1446,191 @@ function buildAvailabilityDesk(analysis, fpl, leagueInjuries, availabilityNews) 
     structuredCount, signalCount: corroboratedNews.length, corroboratedSignals,
     message: officialLineups ? 'Gli undici ufficiali sono la prova più forte della disponibilità a partire; restano possibili assenze dalla panchina.' : structuredCount ? `${structuredCount} segnalazioni strutturate disponibili. Verificare gli aggiornamenti vicino al kickoff.` : corroboratedNews.length ? 'Sono presenti segnali editoriali datati, ma manca un registro strutturato completo per entrambe le rose.' : 'Nessuna evidenza sufficiente: lo stato delle rose resta sconosciuto, non “tutti disponibili”.',
     rule: 'Gerarchia: lineup/club ufficiali → dataset ufficiali o provider espliciti → reporting forte → segnali da verificare. Il silenzio non equivale mai a piena disponibilità.'
+  };
+}
+
+function lineupPlayerKey(value = '') {
+  return normalizeAvailabilityName(value).replace(/\b(jr|sr|ii|iii)\b/g, '').trim();
+}
+
+function samePlayerName(a, b) {
+  const left = lineupPlayerKey(a); const right = lineupPlayerKey(b);
+  if (!left || !right) return false;
+  if (left === right || left.includes(right) || right.includes(left)) return true;
+  const lt = left.split(' ').filter(Boolean);
+  const rt = right.split(' ').filter(Boolean);
+  if (!lt.length || !rt.length || lt.at(-1) !== rt.at(-1)) return false;
+  if (lt.length === 1 || rt.length === 1) return true;
+  const leftFirst = lt[0]; const rightFirst = rt[0];
+  return leftFirst === rightFirst || (leftFirst.length === 1 && rightFirst.startsWith(leftFirst)) || (rightFirst.length === 1 && leftFirst.startsWith(rightFirst));
+}
+
+function lineupPositionGroup(position = '') {
+  const value = String(position).toUpperCase();
+  if (/^(GK|G)$|GOAL/.test(value)) return 'GK';
+  if (/^(D|DF|CB|LB|RB|LWB|RWB)$|BACK|DEF/.test(value)) return 'D';
+  if (/^(F|FW|ST|CF|LW|RW)$|FORW|STRIK|WING/.test(value)) return 'F';
+  if (/^(M|MF|CM|DM|AM|LM|RM|CDM|CAM)$|MID/.test(value)) return 'M';
+  return 'U';
+}
+
+function lineupImportanceLabel(score) {
+  return score >= 82 ? 'Chiave' : score >= 62 ? 'Importante' : score >= 42 ? 'Rotazione forte' : 'Rotazione';
+}
+
+function buildLineupIntelligence(analysis, homeSnapshots, awaySnapshots, availability, fpl = null) {
+  const leaderBoosts = { goalsLeaders: 96, assistsLeaders: 90, totalShots: 82, accuratePasses: 74, saves: 88 };
+  const buildTeam = (team, snapshots) => {
+    const officialTeam = (analysis.lineups?.teams || []).find(item => String(item.teamId) === String(team.id) || sameClubName(item.teamName, team.name));
+    const teamAvailability = (availability?.teams || []).find(item => String(item.teamId) === String(team.id) || sameClubName(item.teamName, team.name)) || { structured: [], lineupOverrides: [], signals: [] };
+    const fplPlayers = (fpl?.squadPlayers || []).filter(item => sameClubName(item.teamName, team.name));
+    const teamLeaders = (analysis.leaders || []).find(item => String(item.teamId) === String(team.id) || sameClubName(item.teamName, team.name));
+    const lineupSnapshots = snapshots.filter(item => item?.lineup?.starters?.length >= 8);
+    const candidates = [];
+    const candidateFor = (name, id = '') => candidates.find(item => (id && item.id && String(item.id) === String(id)) || samePlayerName(item.name, name));
+    const mergeCandidate = (player, extra = {}) => {
+      if (!player?.name && !player?.player && !player?.fullName) return null;
+      const name = player.name || player.fullName || player.player;
+      let candidate = candidateFor(name, player.id);
+      if (!candidate) {
+        candidate = { id: String(player.id || ''), name, shortName: player.shortName || player.player || name, position: player.position || '', jersey: player.jersey || '', starts: 0, weightedStarts: 0, leaderScore: 0, fplScore: 0, sources: [] };
+        candidates.push(candidate);
+      }
+      if (!candidate.id && player.id) candidate.id = String(player.id);
+      if (!candidate.position && player.position) candidate.position = player.position;
+      if (!candidate.jersey && player.jersey) candidate.jersey = player.jersey;
+      Object.assign(candidate, extra);
+      return candidate;
+    };
+
+    const recencyWeights = [5, 3, 2];
+    lineupSnapshots.forEach((snapshot, index) => {
+      (snapshot.lineup.starters || []).forEach(player => {
+        const candidate = mergeCandidate(player);
+        candidate.starts += 1;
+        candidate.weightedStarts += recencyWeights[index] || 1;
+        if (!candidate.sources.includes('ultimi XI ufficiali')) candidate.sources.push('ultimi XI ufficiali');
+      });
+    });
+
+    const maxFpl = {
+      starts: Math.max(0, ...fplPlayers.map(player => player.starts || 0)),
+      minutes: Math.max(0, ...fplPlayers.map(player => player.minutes || 0)),
+      points: Math.max(0, ...fplPlayers.map(player => player.totalPoints || 0)),
+      contribution: Math.max(0, ...fplPlayers.map(player => (player.goals || 0) + (player.assists || 0)))
+    };
+    fplPlayers.forEach(player => {
+      const ratios = [
+        maxFpl.starts ? player.starts / maxFpl.starts : 0,
+        maxFpl.minutes ? player.minutes / maxFpl.minutes : 0,
+        maxFpl.points ? player.totalPoints / maxFpl.points : 0,
+        maxFpl.contribution ? ((player.goals || 0) + (player.assists || 0)) / maxFpl.contribution : 0
+      ];
+      const fplScore = Math.round(ratios[0] * 38 + ratios[1] * 27 + ratios[2] * 20 + ratios[3] * 15);
+      const candidate = mergeCandidate({ ...player, name: player.fullName || player.player }, { fplScore, fpl: player });
+      if (fplScore && !candidate.sources.includes('FPL: minuti, partenze e contributi')) candidate.sources.push('FPL: minuti, partenze e contributi');
+    });
+
+    (teamLeaders?.categories || []).forEach(category => (category.players || []).forEach((player, index) => {
+      const candidate = mergeCandidate(player);
+      candidate.leaderScore = Math.max(candidate.leaderScore, (leaderBoosts[category.id] || 70) - index * 8);
+      if (!candidate.sources.includes('leader del torneo')) candidate.sources.push('leader del torneo');
+    }));
+    [...(officialTeam?.starters || []), ...(officialTeam?.substitutes || [])].forEach(player => mergeCandidate(player));
+
+    const sample = lineupSnapshots.length;
+    candidates.forEach(candidate => {
+      const startRate = sample ? candidate.starts / sample : 0;
+      const recentScore = sample ? Math.round(startRate * 78 + Math.min(22, candidate.weightedStarts / Math.max(1, recencyWeights.slice(0, sample).reduce((sum, value) => sum + value, 0)) * 22)) : 0;
+      candidate.importance = clamp(Math.max(recentScore, candidate.leaderScore, candidate.fplScore), 0, 100);
+      candidate.importanceLabel = lineupImportanceLabel(candidate.importance);
+      candidate.startRate = startRate;
+    });
+
+    const availabilityFor = name => [...(teamAvailability.structured || []), ...(teamAvailability.lineupOverrides || [])].find(item => samePlayerName(item.player, name));
+    const confirmedUnavailable = item => item && item.category !== 'dubbio' && !(item.chance != null && Number(item.chance) > 25);
+    const latestLineup = lineupSnapshots[0]?.lineup || null;
+    const formation = officialTeam?.formation || latestLineup?.formation || '';
+    let selected = [];
+    let mode = 'non_disponibile';
+    if (analysis.lineups?.official && officialTeam?.starters?.length >= 11) {
+      selected = officialTeam.starters.slice(0, 11);
+      mode = 'ufficiale';
+    } else {
+      const eligible = candidates.filter(candidate => (candidate.starts || candidate.fplScore || candidate.leaderScore) && !confirmedUnavailable(availabilityFor(candidate.name)))
+        .sort((a, b) => b.importance - a.importance || b.weightedStarts - a.weightedStarts || a.name.localeCompare(b.name));
+      const fplEvidence = fplPlayers.filter(player => player.starts || player.minutes).length;
+      if (eligible.length >= 8 && (sample || fplEvidence >= 8)) {
+        const digits = String(formation).match(/\d/g)?.map(Number) || [];
+        const quotas = { GK: 1, D: digits[0] || 4, F: digits.length > 1 ? digits.at(-1) : 2 };
+        quotas.M = Math.max(2, 10 - quotas.D - quotas.F);
+        const used = new Set();
+        const take = (group, count) => eligible.filter(player => lineupPositionGroup(player.position) === group && !used.has(player)).slice(0, count).map(player => { used.add(player); return player; });
+        selected = [...take('GK', quotas.GK), ...take('D', quotas.D), ...take('M', quotas.M), ...take('F', quotas.F)];
+        if (selected.length < 11) selected.push(...eligible.filter(player => !used.has(player)).slice(0, 11 - selected.length));
+        selected = selected.slice(0, 11);
+        if (selected.length === 11) mode = 'probabile';
+        else selected = [];
+      }
+    }
+
+    const importanceEvidenceFor = candidate => {
+      if (!candidate) return [];
+      const evidence = [];
+      if (candidate.starts && sample) evidence.push(`${candidate.starts}/${sample} partenze negli XI recenti`);
+      if (candidate.fpl && (candidate.fpl.starts || candidate.fpl.minutes)) evidence.push(`FPL: ${candidate.fpl.starts || 0} partenze, ${candidate.fpl.minutes || 0} minuti, ${(candidate.fpl.goals || 0) + (candidate.fpl.assists || 0)} gol+assist`);
+      if (candidate.leaderScore) evidence.push('presenza tra i leader statistici del torneo');
+      return evidence;
+    };
+    const selectedDetailed = selected.map(player => {
+      const candidate = candidateFor(player.name || player.player || player.fullName, player.id) || mergeCandidate(player);
+      const estimatedStart = mode === 'ufficiale' ? 100 : clamp(Math.round(32 + candidate.startRate * 48 + candidate.fplScore * .2 - (availabilityFor(candidate.name)?.category === 'dubbio' ? 22 : 0)), 18, 94);
+      return { id: candidate.id, name: player.name || candidate.name, shortName: player.shortName || candidate.shortName, jersey: player.jersey || candidate.jersey, position: player.position || candidate.position, estimatedStart, importance: candidate.importance, importanceLabel: candidate.importanceLabel, importanceEvidence: importanceEvidenceFor(candidate) };
+    });
+
+    const avgStability = selectedDetailed.length && sample ? selectedDetailed.reduce((sum, player) => sum + (candidateFor(player.name)?.startRate || 0), 0) / selectedDetailed.length : 0;
+    const fplEvidence = fplPlayers.filter(player => player.starts || player.minutes).length;
+    const confidence = mode === 'ufficiale' ? 100 : mode === 'probabile' ? clamp(Math.round(28 + Math.min(3, sample) / 3 * 34 + avgStability * 27 + Math.min(1, fplEvidence / 11) * 11), 35, 88) : null;
+    const latestNames = latestLineup?.starters || [];
+    const continuity = selectedDetailed.length && latestNames.length ? Math.round(selectedDetailed.filter(player => latestNames.some(previous => samePlayerName(previous.name, player.name))).length / 11 * 100) : null;
+    const knownCore = candidates.filter(candidate => candidate.importance >= 20).sort((a, b) => b.importance - a.importance).slice(0, 11);
+    const idealStrength = knownCore.reduce((sum, player) => sum + player.importance, 0);
+    const selectedStrength = selectedDetailed.reduce((sum, player) => sum + (candidateFor(player.name)?.importance || 0), 0);
+    const strength = knownCore.length >= 8 && idealStrength > 0 ? clamp(Math.round(selectedStrength / idealStrength * 100), 35, 100) : null;
+
+    const bench = officialTeam?.substitutes || [];
+    const impactReports = (teamAvailability.structured || []).map(item => {
+      const candidate = candidateFor(item.player, item.id);
+      const importance = candidate?.importance || 0;
+      const onBench = mode === 'ufficiale' && bench.some(player => samePlayerName(player.name, item.player));
+      const evidence = [...importanceEvidenceFor(candidate), `${item.source || 'Dataset strutturato'}: ${item.category || 'stato segnalato'}`];
+      return { player: item.player, category: onBench ? 'in panchina' : item.category, detail: onBench ? 'Compare tra le riserve ufficiali: non è un assente confermato.' : item.detail, source: item.source, chance: item.chance, importance, importanceLabel: lineupImportanceLabel(importance), evidence, key: importance >= 62 };
+    }).sort((a, b) => b.importance - a.importance);
+    const omissionReports = mode === 'ufficiale' ? candidates.filter(candidate => candidate.importance >= 62 && !selectedDetailed.some(player => samePlayerName(player.name, candidate.name))).map(candidate => {
+      const availabilityItem = availabilityFor(candidate.name);
+      const onBench = bench.some(player => samePlayerName(player.name, candidate.name));
+      return { player: candidate.name, importance: candidate.importance, importanceLabel: candidate.importanceLabel, status: onBench ? 'in panchina' : availabilityItem?.category || 'non a referto', detail: onBench ? 'Titolare abituale presente tra le riserve ufficiali.' : availabilityItem?.detail || 'Non compare tra titolari o riserve pubblicate; motivo non confermato.', evidence: importanceEvidenceFor(candidate) };
+    }).sort((a, b) => b.importance - a.importance).slice(0, 5) : [];
+    const returns = (teamAvailability.lineupOverrides || []).map(item => ({ player: item.player, previous: item.category, detail: 'La presenza nell’XI ufficiale supera la segnalazione precedente.' }));
+
+    const evidence = [];
+    if (sample) evidence.push(`${sample}/3 formazioni ufficiali recenti osservate`);
+    if (fplEvidence) evidence.push(`${fplEvidence} profili con minuti/partenze FPL`);
+    if (teamLeaders?.categories?.length) evidence.push('leader del torneo incrociati');
+    return {
+      teamId: team.id, teamName: team.name, mode, formation: formation || '', confidence, strength, continuity,
+      selected: selectedDetailed, importantMissing: impactReports.filter(item => item.key && item.category !== 'in panchina'), availabilityImpact: impactReports,
+      omissions: omissionReports, returns, sample: { recentLineups: sample, fplProfiles: fplEvidence, candidates: candidates.length },
+      evidence,
+      note: mode === 'ufficiale' ? 'XI ufficiale: il 100 indica certezza della formazione, non forza assoluta.' : mode === 'probabile' ? 'XI stimato da partenze recenti pesate per recenza, ruoli, disponibilità e dati FPL quando applicabili.' : 'Campione insufficiente per pubblicare una probabile formazione senza inventare nomi.'
+    };
+  };
+  const teams = [buildTeam(analysis.event.home, homeSnapshots), buildTeam(analysis.event.away, awaySnapshots)];
+  const status = analysis.lineups?.official ? 'ufficiale' : teams.some(team => team.mode === 'probabile') ? 'probabili_parziali' : 'non_disponibile';
+  return {
+    status, official: Boolean(analysis.lineups?.official), generatedAt: nowIso(), teams,
+    rule: 'Due punteggi separati: Affidabilità XI misura quanto è certa la formazione; Forza disponibile confronta i giocatori selezionati con il nucleo osservato. Non sono probabilità di vittoria.',
+    methodology: 'Metodo gratuito: XI recenti con peso decrescente 5-3-2, minuti e partenze FPL per la Premier League, leader del torneo, injury feed e formazioni ufficiali. La probabile viene pubblicata soltanto con undici nomi supportati dal campione.'
   };
 }
 
@@ -1550,7 +1753,7 @@ function buildDeepDive(analysis, tactical, homeCalendar, awayCalendar, homeSeaso
 }
 
 async function getIntelligence(eventId, leagueId, force = false) {
-  return cached(`intelligence:v2:${leagueId}:${eventId}`, 10 * 60_000, async () => {
+  return cached(`intelligence:v3:${leagueId}:${eventId}`, 10 * 60_000, async () => {
     const analysisResult = await getAnalysis(eventId, leagueId, force);
     const analysis = analysisResult.value;
     const { home, away, date } = analysis.event;
@@ -1604,14 +1807,19 @@ async function getIntelligence(eventId, leagueId, force = false) {
     if (!analysis.lineups.official) alerts.push({ level: 'alta', title: 'Undici non confermati', text: 'La lettura può cambiare con turnover, assenze o un attaccante lasciato fuori. Ricontrolla vicino al calcio d’inizio.' });
     const matchAvailabilityNews = news.filter(item => ['Disponibilità', 'Formazioni'].includes(item.tag));
     const availability = buildAvailabilityDesk(analysis, fplAvailability, leagueInjuries, availabilityEvidence);
+    const lineupIntelligence = buildLineupIntelligence(analysis, homeSnapshots, awaySnapshots, availability, fplAvailability);
     if (availability.signalCount || matchAvailabilityNews.length) alerts.push({ level: 'media', title: 'Availability Watch', text: `${availability.signalCount + matchAvailabilityNews.length} segnali datati riguardano disponibilità o formazione: distingui dataset strutturati, fonte e semplici titoli.` });
     if (availability.structuredCount) alerts.push({ level: 'alta', title: 'Assenze o dubbi registrati', text: `${availability.structuredCount} giocatori risultano segnalati nei dataset strutturati. Apri l’Availability Desk per dettaglio, timestamp e gerarchia della fonte.` });
+    const keyAbsences = lineupIntelligence.teams.flatMap(team => team.importantMissing || []);
+    if (keyAbsences.length) alerts.push({ level: 'alta', title: 'Giocatori importanti segnalati', text: `${keyAbsences.length} assenze o dubbi riguardano elementi classificati importanti dal campione osservato. Il punteggio misura impatto relativo, non certezza medica.` });
+    const officialOmissions = lineupIntelligence.teams.flatMap(team => team.omissions || []);
+    if (analysis.lineups.official && officialOmissions.length) alerts.push({ level: 'alta', title: 'XI con esclusioni rilevanti', text: `${officialOmissions.length} titolari abituali risultano in panchina, non a referto o coperti da una segnalazione di disponibilità.` });
 
     const tactical = { home: homeTactical, away: awayTactical, matchup };
     const reliability = buildMatchReliability(analysis, homeCalendar, awayCalendar, tactical, news, availability);
     const deepDive = buildDeepDive(analysis, tactical, homeCalendar, awayCalendar, homeSeason, awaySeason);
     return {
-      engine: { version: '1.2', name: 'VANTAGGIO Match Intelligence', generatedAt: nowIso() },
+      engine: { version: '1.3', name: 'VANTAGGIO Match Intelligence', generatedAt: nowIso() },
       event: analysis.event,
       generatedAt: nowIso(),
       context: analysis.context,
@@ -1623,12 +1831,13 @@ async function getIntelligence(eventId, leagueId, force = false) {
       tournamentStats: analysis.tournamentStats,
       leaders: analysis.leaders,
       lineups: analysis.lineups,
+      lineupIntelligence,
       availability,
       reliability,
       news: { articles: news.slice(0, 8), availabilitySignals: availability.signalCount + matchAvailabilityNews.length, disclaimer: 'I titoli sono segnali informativi, non conferme mediche o ufficiali: verifica sempre la fonte originale.' },
       alerts,
       keyQuestion: analysis.context.keyQuestion,
-      methodology: 'Context Engine: distingue dati del feed, letture derivate e punti da verificare. Availability Intelligence ordina lineup ufficiali, dataset espliciti e reporting datato senza trasformare silenzi o feed vuoti in piena disponibilità.'
+      methodology: 'Context Engine distingue fatti, letture e punti da verificare. XI Intelligence separa probabile e ufficiale, misura certezza, continuità e forza disponibile sul solo campione osservato. Availability Intelligence non trasforma silenzi o feed vuoti in piena disponibilità.'
     };
   }, force);
 }

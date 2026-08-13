@@ -55,7 +55,7 @@ function createNode() {
   context.globalThis = context;
 
   let source = fs.readFileSync('public/app.js', 'utf8').replace(/\ninit\(\);\s*$/, '\n');
-  source += '\nglobalThis.__test={state,safeUrl,teamLogo,newsCard,matchRow,renderDashboard,renderMatchesView,renderRadarView,renderNewsView,renderStandingsView,renderFavoritesView,renderIntelligence,renderFallbackDeepAnalysis,renderPowerAnalysis,archivePreKickoffModel,reconcileModelSnapshots,modelTrackStats,readinessAssessment,contextDateConflict,captureSignalLifecycle,reconcileSignalLifecycles};';
+  source += '\nglobalThis.__test={state,safeUrl,teamLogo,newsCard,matchRow,renderDashboard,renderMatchesView,renderRadarView,renderNewsView,renderStandingsView,renderFavoritesView,renderIntelligence,renderFallbackDeepAnalysis,renderPowerAnalysis,lineupIntel,archivePreKickoffModel,reconcileModelSnapshots,modelTrackStats,readinessAssessment,contextDateConflict,captureSignalLifecycle,reconcileSignalLifecycles,capturePrematchVault,archivedPrematchData,renderPrematchVault};';
   vm.runInNewContext(source, context, { filename: 'public/app.js' });
   const test = context.__test;
   test.state.today = status.today;
@@ -79,10 +79,13 @@ function createNode() {
   const roomNumbers = test.renderIntelligence(intelligencePayload.data);
   test.state.matchRoomTabs[pre.id] = 'verify';
   const roomVerify = test.renderIntelligence(intelligencePayload.data);
+  test.state.matchRoomTabs[String(reviewPayload.data.event.id)] = 'teams';
+  const officialLineups = test.renderIntelligence(reviewPayload.data);
+  delete test.state.matchRoomTabs[String(reviewPayload.data.event.id)];
   const renders = {
     dashboard: test.renderDashboard(), matches: test.renderMatchesView(), radar: test.renderRadarView(),
     news: test.renderNewsView(), standings: test.renderStandingsView(), favorites: test.renderFavoritesView(),
-    roomSummary, roomTeams, roomNumbers, roomVerify, postDossier: test.renderIntelligence(reviewPayload.data),
+    roomSummary, roomTeams, roomNumbers, roomVerify, officialLineups, postDossier: test.renderIntelligence(reviewPayload.data),
     fallback: test.renderFallbackDeepAnalysis(pre, analysisPayload.data, 'Errore simulato'),
     power: test.renderPowerAnalysis(analysisPayload.data)
   };
@@ -106,7 +109,8 @@ function createNode() {
   if ((renders.roomSummary.match(/data-prematch-jump=/g) || []).length !== 6 || !renders.roomSummary.includes('non documentate')) throw new Error('Manifesto di copertura prematch incompleto');
   const conflict = test.contextDateConflict({ event: { date: '2026-08-13T18:00:00Z' }, context: { phase: '2021-22 Qualifying' } });
   if (!conflict.includes('Metadato contraddittorio') || test.contextDateConflict({ event: { date: '2026-08-13T18:00:00Z' }, context: { phase: '2025-26 Qualifying' } })) throw new Error('Contraddizioni temporali del contesto non rilevate correttamente');
-  if (!renders.roomTeams.includes('TACTICAL MATCHUP') || !renders.roomTeams.includes('AVAILABILITY INTELLIGENCE')) throw new Error('Area Squadre non raggruppata correttamente');
+  if (!renders.roomTeams.includes('TACTICAL MATCHUP') || !renders.roomTeams.includes('AVAILABILITY INTELLIGENCE') || !renders.roomTeams.includes('XI INTELLIGENCE') || !renders.roomTeams.includes('Affidabilità XI') || !renders.roomTeams.includes('Forza disponibile')) throw new Error('Area Squadre o XI Intelligence non raggruppata correttamente');
+  if ((renders.officialLineups.match(/XI UFFICIALE/g) || []).length !== 2 || (renders.officialLineups.match(/>100</g) || []).length < 2 || !renders.officialLineups.includes('in panchina') || !renders.officialLineups.includes('non a referto')) throw new Error('XI ufficiali, punteggio certo o classificazione omissioni non renderizzati');
   if (!renders.roomNumbers.includes('POWER MODEL 2.1') || !renders.roomNumbers.includes('roomPowerMount')) throw new Error('Area Numeri non valida');
   if (!renders.roomVerify.includes('EVIDENCE MAP') || !renders.roomVerify.includes('What Changed · storia della partita') || !renders.roomVerify.includes('Data Reliability Ledger') || !renders.roomVerify.includes('Fonti e news collegate')) throw new Error('Area Verifiche non valida');
   if (!renders.dashboard.includes('MODEL TRACK RECORD') || !renders.dashboard.includes('SOURCE HEALTH CENTER')) throw new Error('Track Record o Source Health Center non renderizzati');
@@ -167,8 +171,39 @@ function createNode() {
   if (test.state.signalLifecycle[lifecycleMatch.id]?.result?.homeScore !== 1) throw new Error('Signal Lifecycle non riconciliato con il finale');
   if (test.captureSignalLifecycle({ ...lifecycleMatch, state: 'post' }, 'T-10')) throw new Error('Signal Lifecycle accetta uno snapshot post-hoc');
 
+  if (!test.capturePrematchVault(lifecycleMatch)) throw new Error('Pre-Match Vault non salva un dossier realmente osservato prima del kickoff');
+  const vaultBefore = test.state.prematchVault[lifecycleMatch.id];
+  const liveMatch = { ...lifecycleMatch, state: 'in', minute: 27, home: { ...lifecycleMatch.home, score: 1 }, away: { ...lifecycleMatch.away, score: 0 } };
+  const frozen = test.archivedPrematchData(liveMatch);
+  if (!frozen?.intelligence?.archiveMode || frozen.intelligence.event.state !== 'pre' || frozen.intelligence.event.home.score === liveMatch.home.score) throw new Error('Il dossier nel Vault non resta congelato allo stato prematch');
+  test.state.matchRoomTabs[lifecycleMatch.id] = 'summary';
+  const vaultSummary = test.renderPrematchVault(frozen);
+  test.state.matchRoomTabs[lifecycleMatch.id] = 'teams';
+  const vaultHtml = test.renderPrematchVault(frozen);
+  if (!vaultHtml.includes('PRE-MATCH VAULT') || !vaultHtml.includes('sola lettura') || !vaultHtml.includes('MATCH CONTROL ROOM') || !vaultHtml.includes('Dossier prematch congelato') || !vaultHtml.includes('XI INTELLIGENCE')) throw new Error('Il dossier congelato non è completo o chiaramente etichettato');
+  if (vaultHtml.includes('SCORE ESSENZIALE') || !vaultHtml.includes('Congelata') || !vaultSummary.includes('CONGELATA') || !vaultSummary.includes('non descrive la situazione live') || vaultSummary.includes('Prima fotografia in preparazione')) throw new Error('Il Vault viene confuso con una ricalcolazione o una ricerca live');
+  if (test.capturePrematchVault({ ...lifecycleMatch, state: 'in' }) || test.state.prematchVault[lifecycleMatch.id].capturedAt !== vaultBefore.capturedAt) throw new Error('Il Pre-Match Vault accetta un backfill post-kickoff');
+  if (test.archivedPrematchData({ ...liveMatch, id: 'vault-inesistente' })) throw new Error('Il Vault inventa un dossier mai osservato');
+  for (let index = 0; index < 27; index += 1) {
+    const boundedMatch = { ...lifecycleMatch, id: `vault-bounded-${index}` };
+    const boundedKey = `${boundedMatch.league.id}:${boundedMatch.id}`;
+    test.state.intelligence[boundedKey] = { ...test.state.intelligence[lifecycleKey], event: { ...test.state.intelligence[lifecycleKey].event, id: boundedMatch.id } };
+    test.capturePrematchVault(boundedMatch);
+  }
+  if (Object.keys(test.state.prematchVault).length !== 24) throw new Error('Il Pre-Match Vault non rispetta il limite di 24 partite');
+  const normalSetItem = context.localStorage.setItem;
+  context.localStorage.setItem = (key, value) => {
+    if (key === 'vantaggio:prematchVault:v1' && Object.keys(JSON.parse(value)).length > 10) throw new Error('QuotaExceededError simulato');
+    storage.set(key, String(value));
+  };
+  const quotaMatch = { ...lifecycleMatch, id: 'vault-quota-fallback' };
+  test.state.intelligence[`${quotaMatch.league.id}:${quotaMatch.id}`] = test.state.intelligence[lifecycleKey];
+  test.capturePrematchVault(quotaMatch);
+  context.localStorage.setItem = normalSetItem;
+  if (Object.keys(test.state.prematchVault).length !== 10) throw new Error('Fallback quota del Vault non riduce la conservazione a 10 partite');
+
   const css = fs.readFileSync('public/styles.css', 'utf8');
-  for (const marker of ['@media (max-width: 720px)', '@media (max-width: 420px)', 'prefers-reduced-motion', '.deep-dive.fallback', '.preseason-reading', '.operations-deck', '.availability-desk', '.match-history', '.match-control-room', '.match-room-tabs', '.readiness-gate', '.evidence-map', '.signal-lifecycle', '.lifecycle-card', '.prematch-total-intelligence', '.prematch-manifest', '.score-only-live', '.deep-story p { margin: 0; color: var(--muted); font-size: 10.5px;']) {
+  for (const marker of ['@media (max-width: 720px)', '@media (max-width: 420px)', 'prefers-reduced-motion', '.deep-dive.fallback', '.preseason-reading', '.operations-deck', '.availability-desk', '.match-history', '.match-control-room', '.match-room-tabs', '.readiness-gate', '.evidence-map', '.signal-lifecycle', '.lifecycle-card', '.prematch-total-intelligence', '.prematch-manifest', '.score-only-live', '.xi-intelligence', '.xi-team-grid', '.prematch-vault-banner', '.deep-story p { margin: 0; color: var(--muted); font-size: 10.5px;']) {
     if (!css.includes(marker)) throw new Error(`Regola CSS mancante: ${marker}`);
   }
   console.log('Frontend test completato: viste, dossier, URL, fallback grafici e pre-season validi.');

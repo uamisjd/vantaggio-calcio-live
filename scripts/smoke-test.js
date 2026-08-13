@@ -10,11 +10,11 @@ async function get(path, type = 'json') {
 
 (async () => {
   const html = await get('/', 'text');
-  if (!html.includes('VANTAGGIO') || !html.includes('V4.7') || !html.includes('/app.js?v=4.7.0') || !html.includes('/styles.css?v=4.7.0')) throw new Error('Homepage o asset V4.7.0 non validi');
-  const [appJs, styles] = await Promise.all([get('/app.js?v=4.7.0', 'text'), get('/styles.css?v=4.7.0', 'text')]);
+  if (!html.includes('VANTAGGIO') || !html.includes('V4.8') || !html.includes('/app.js?v=4.8.0') || !html.includes('/styles.css?v=4.8.0')) throw new Error('Homepage o asset V4.8.0 non validi');
+  const [appJs, styles] = await Promise.all([get('/app.js?v=4.8.0', 'text'), get('/styles.css?v=4.8.0', 'text')]);
   const v4Modules = ['DAILY BRIEFING', 'PRE-MATCH COMMAND', 'SIGNAL STUDIO', 'VANTAGGIO NEWSROOM', 'TABLE LAB', 'MY MATCHROOM', 'SCOUT SEARCH', 'WHAT CHANGED DESK', 'KICKOFF WATCH', 'TEAM DNA', 'RELIABILITY LEDGER', 'MATCH ARCHIVE', 'MODEL TRACK RECORD', 'SOURCE HEALTH CENTER', 'AVAILABILITY INTELLIGENCE'];
-  const dossierFirst = ['MATCH CONTROL ROOM', 'PRE-MATCH TOTAL INTELLIGENCE', 'prematchTotalIntelligence', 'renderFallbackDeepAnalysis', 'readinessGate', 'EVIDENCE MAP', 'SIGNAL LIFECYCLE', 'captureSignalLifecycle', 'COPERTURA RIDOTTA'];
-  if (!v4Modules.every(module => appJs.includes(module)) || !dossierFirst.every(module => appJs.includes(module)) || !styles.includes('V4.7 · Pre-Match Total Intelligence') || !styles.includes('.prematch-total-intelligence') || !styles.includes('.deep-dive.fallback')) throw new Error('Moduli esperienza V4.5 incompleti');
+  const dossierFirst = ['MATCH CONTROL ROOM', 'PRE-MATCH TOTAL INTELLIGENCE', 'prematchTotalIntelligence', 'renderFallbackDeepAnalysis', 'readinessGate', 'EVIDENCE MAP', 'SIGNAL LIFECYCLE', 'captureSignalLifecycle', 'COPERTURA RIDOTTA', 'XI INTELLIGENCE', 'PRE-MATCH VAULT', 'capturePrematchVault'];
+  if (!v4Modules.every(module => appJs.includes(module)) || !dossierFirst.every(module => appJs.includes(module)) || !styles.includes('V4.8 · XI Intelligence + Pre-Match Vault') || !styles.includes('.prematch-total-intelligence') || !styles.includes('.xi-intelligence') || !styles.includes('.prematch-vault-banner') || !styles.includes('.deep-dive.fallback')) throw new Error('Moduli esperienza V4.8 incompleti');
   if (appJs.includes('class="broadcast-strip"') || appJs.includes('function newsroomPreview') || appJs.includes('SIGNAL LEDGER') || styles.includes('.broadcast-strip') || styles.includes('.signal-ledger')) throw new Error('Componenti ridondanti ancora attivi');
   const modalSource = appJs.slice(appJs.indexOf('function openMatch'), appJs.indexOf('function renderFallbackDeepAnalysis'));
   const summarySource = appJs.slice(appJs.indexOf('function matchRoomSummary'), appJs.indexOf('function matchRoomTeams'));
@@ -25,8 +25,8 @@ async function get(path, type = 'json') {
   const totalIndex = summarySource.indexOf('prematchTotalIntelligence(data)');
   const lifecycleIndex = summarySource.indexOf('signalLifecycleMarkup(data)');
   if (readinessIndex < 0 || briefIndex < readinessIndex || totalIndex < briefIndex || lifecycleIndex < totalIndex || !['summary', 'teams', 'numbers', 'verify'].every(tab => intelligenceSource.includes(`id: '${tab}'`))) throw new Error('Gerarchia Match Control Room non valida');
-  const scoreOnlyIndex = modalSource.indexOf("if (match.state === 'in' || preWindowClosed)");
-  if (scoreOnlyIndex < 0 || scoreOnlyIndex > modalSource.indexOf('loadIntelligence(match)') || appJs.includes('function notifyLive') || appJs.includes("addChange('live'")) throw new Error('Politica score-only per le partite in corso non valida');
+  const liveVaultIndex = modalSource.indexOf("if (match.state === 'in' || preWindowClosed)");
+  if (liveVaultIndex < 0 || liveVaultIndex > modalSource.indexOf('loadIntelligence(match)') || !modalSource.includes('archivedPrematchData(match)') || !modalSource.includes('renderPrematchVault(') || appJs.includes('function notifyLive') || appJs.includes("addChange('live'")) throw new Error('Politica Pre-Match Vault per le partite in corso non valida');
 
   const status = await get('/api/status');
   if (!status.ok || status.timezone !== 'Europe/Rome' || status.leagues.length < 5 || !Array.isArray(status.standingsLeagues) || status.standingsLeagues.length < 12) throw new Error('Status API non valido');
@@ -53,7 +53,11 @@ async function get(path, type = 'json') {
 
   const intelligence = await get(`/api/intelligence?event=${encodeURIComponent(analyzable.id)}&league=${encodeURIComponent(analyzable.league.id)}`);
   const intel = intelligence.data;
-  if (!intelligence.ok || intel.engine?.version !== '1.2' || !intel.event || !intel.context || !intel.calendar || !intel.tactical || !intel.reliability || !intel.deepDive || !Array.isArray(intel.deepDive.paragraphs) || !intel.deepDive.paragraphs.length) throw new Error('Match Intelligence API non valida');
+  if (!intelligence.ok || intel.engine?.version !== '1.3' || !intel.event || !intel.context || !intel.calendar || !intel.tactical || !intel.reliability || !intel.deepDive || !Array.isArray(intel.deepDive.paragraphs) || !intel.deepDive.paragraphs.length) throw new Error('Match Intelligence API non valida');
+  const xi = intel.lineupIntelligence;
+  if (!xi || !['ufficiale', 'probabili_parziali', 'non_disponibile'].includes(xi.status) || !Array.isArray(xi.teams) || xi.teams.length !== 2 || !xi.rule?.includes('Non sono probabilità di vittoria')) throw new Error('XI Intelligence non valida');
+  if (!xi.teams.every(team => ['ufficiale', 'probabile', 'non_disponibile'].includes(team.mode) && Array.isArray(team.selected) && Array.isArray(team.importantMissing) && Array.isArray(team.omissions) && Number.isFinite(team.confidence) && Number.isFinite(team.strength))) throw new Error('Punteggi o classificazioni XI non validi');
+  if (!xi.teams.every(team => team.mode === 'non_disponibile' || team.selected.length === 11)) throw new Error('XI pubblicata senza undici selezioni');
   if (!Array.isArray(intel.critical) || !intel.critical.every(item => ['Fatto', 'Lettura', 'Verifica'].includes(item.type))) throw new Error('Separazione fatto/lettura/verifica non valida');
   if (!Array.isArray(intel.script) || !intel.script.length || !Array.isArray(intel.alerts) || !intel.lineups || !intel.availability || !Array.isArray(intel.news?.articles)) throw new Error('Match Intelligence incompleta');
   if (!Number.isFinite(intel.availability.score) || !Array.isArray(intel.availability.teams) || intel.availability.teams.length !== 2 || !Array.isArray(intel.availability.sources) || !intel.availability.rule?.includes('silenzio')) throw new Error('Availability Intelligence non valida');
@@ -79,20 +83,25 @@ async function get(path, type = 'json') {
   const review = await get('/api/intelligence?event=401873624&league=uefa.super_cup');
   if (review.data.deepDive?.mode !== 'post' || review.data.event.home.score !== 2 || review.data.event.away.score !== 1 || !review.data.deepDive.paragraphs?.length) throw new Error('Deep Match Review non valida');
   if (!review.data.deepDive.paragraphs.some(item => item.title === 'Season Vault') || !review.data.deepDive.teamCases.every(item => item.season?.played > 0) || !review.data.deepDive.unavailable.some(item => item.includes('xG'))) throw new Error('Season Vault o trasparenza dati incompleti');
+  const officialXi = review.data.lineupIntelligence;
+  if (officialXi?.status !== 'ufficiale' || !officialXi.teams?.every(team => team.mode === 'ufficiale' && team.confidence === 100 && team.selected.length === 11)) throw new Error('Scoring delle formazioni ufficiali non valido');
+  if (!officialXi.teams.flatMap(team => team.omissions || []).every(item => ['in panchina', 'non a referto', 'infortunio', 'indisponibile', 'squalifica', 'dubbio'].includes(item.status))) throw new Error('Classificazione delle omissioni ufficiali non valida');
 
   const health = await get('/api/health');
   if (!Array.isArray(health.sources) || !health.sources.some(source => source.calls > 0 && source.lastSuccessAt) || !health.rule) throw new Error('Source Health Center non valido');
 
-  console.log(`✓ Homepage V4.7.0 e asset cache serviti`);
+  console.log(`✓ Homepage V4.8.0 e asset cache serviti`);
   console.log(`✓ Dossier-first, fallback trasparente e componenti ridondanti rimossi`);
   console.log(`✓ ${matches.data.matches.length} partite in ${matches.data.coverage?.competitions || 0} competizioni`);
   console.log(`✓ Power Model 2.1 operativo su ${analyzable.home.name}–${analyzable.away.name}`);
   console.log(`✓ Match Intelligence: ${intel.critical.length} evidenze, ${intel.alerts.length} alert, affidabilità ${intel.reliability.overall}/100`);
+  console.log(`✓ XI Intelligence: ${xi.status}, ${xi.teams.map(team => `${team.teamName} ${team.mode} ${team.confidence}/100`).join(' · ')}`);
   console.log(`✓ Availability Intelligence: ${intel.availability.structuredCount} record, ${intel.availability.signalCount} segnali, copertura ${intel.availability.score}/100`);
   if (premierAvailability) console.log(`✓ Premier League availability: FPL ufficiale, ${premierAvailability.structuredCount} status strutturati`);
   console.log(`✓ Source Health Center: ${health.sources.filter(source => source.calls).length} fonti osservate`);
   console.log(`✓ Team DNA ${dna.team.name}: ${dna.profile.observedGames} boxscore, affidabilità ${dna.reliability.overall}/100`);
   console.log(`✓ Deep Match Review PSG–Aston Villa: 2-1, ${review.data.deepDive.paragraphs.length} blocchi editoriali verificati`);
+  console.log(`✓ XI ufficiali storici: 22 titolari, affidabilità 100/100 e omissioni classificate`);
   console.log(`✓ ${news.data.articles.length} notizie da ${news.data.sources.filter(item => item.ok).length} fonti`);
   console.log(`✓ ${standings.data.table.length} righe classifica Serie A`);
   console.log('Smoke test completato senza errori.');

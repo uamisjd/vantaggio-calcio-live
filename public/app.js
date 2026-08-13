@@ -26,6 +26,7 @@ const state = {
   sourceHealth: null,
   modelSnapshots: readLocalJson('vantaggio:modelSnapshots:v1', {}),
   signalLifecycle: readLocalJson('vantaggio:signalLifecycle:v1', {}),
+  prematchVault: readLocalJson('vantaggio:prematchVault:v1', {}),
   modelReconciling: false,
   lastModelReconcileAt: 0,
   fixtureLedger: readLocalJson('vantaggio:fixtureLedger', {}),
@@ -318,6 +319,61 @@ function persistSignalLifecycle() {
   localStorage.setItem('vantaggio:signalLifecycle:v1', JSON.stringify(state.signalLifecycle));
 }
 
+function persistPrematchVault(limit = 24) {
+  const entries = Object.entries(state.prematchVault).sort((a, b) => new Date(b[1].capturedAt || 0) - new Date(a[1].capturedAt || 0)).slice(0, limit);
+  state.prematchVault = Object.fromEntries(entries);
+  try {
+    localStorage.setItem('vantaggio:prematchVault:v1', JSON.stringify(state.prematchVault));
+  } catch {
+    if (limit > 10) persistPrematchVault(10);
+  }
+}
+
+function capturePrematchVault(match) {
+  if (!match || match.state !== 'pre') return false;
+  const kickoffMs = new Date(match.date).getTime();
+  if (!Number.isFinite(kickoffMs) || Date.now() >= kickoffMs) return false;
+  const key = `${match.league.id}:${match.id}`;
+  const intelligence = state.intelligence[key];
+  const analysis = state.analyses[key];
+  if (!intelligence && !analysis) return false;
+  if (intelligence?.event?.state && intelligence.event.state !== 'pre') return false;
+  if (analysis?.event?.state && analysis.event.state !== 'pre') return false;
+  const existing = state.prematchVault[match.id] || {};
+  state.prematchVault[match.id] = {
+    ...existing,
+    eventId: match.id, leagueId: match.league.id, leagueLabel: match.league.label,
+    home: match.home.name, away: match.away.name, kickoff: new Date(kickoffMs).toISOString(),
+    capturedAt: new Date().toISOString(),
+    intelligence: intelligence || existing.intelligence || null,
+    analysis: analysis || existing.analysis || null
+  };
+  persistPrematchVault();
+  return true;
+}
+
+function archivedPrematchData(match) {
+  const vault = state.prematchVault[match.id];
+  if (!vault) return null;
+  const intelligence = vault.intelligence ? {
+    ...vault.intelligence,
+    archiveMode: 'prematch-live', archiveSnapshotAt: vault.capturedAt,
+    event: { ...vault.intelligence.event, state: 'pre', completed: false }
+  } : null;
+  const analysis = vault.analysis ? { ...vault.analysis, archiveMode: 'prematch-live', archiveSnapshotAt: vault.capturedAt, event: { ...vault.analysis.event, state: 'pre', completed: false } } : null;
+  return { ...vault, intelligence, analysis };
+}
+
+function renderPrematchVault(archive) {
+  if (archive?.intelligence) {
+    return `<section class="prematch-vault-banner">${icon('shield')}<div><span>PRE-MATCH VAULT · SOLA LETTURA</span><strong>Il dossier trovato prima del kickoff resta disponibile</strong><p>Fotografia del ${escapeHtml(displayNewsDate(archive.capturedAt))} alle ${escapeHtml(fmtTime.format(new Date(archive.capturedAt)))}. È una copia in sola lettura: nessun dato è ricalcolato con punteggio o andamento della gara.</p></div></section><div id="matchIntelligence">${renderIntelligence(archive.intelligence)}</div>`;
+  }
+  if (archive?.analysis) {
+    return `<section class="prematch-vault-banner partial">${icon('shield')}<div><span>PRE-MATCH VAULT · COPERTURA PARZIALE</span><strong>È stata osservata soltanto la fotografia quantitativa</strong><p>Snapshot del ${escapeHtml(displayNewsDate(archive.capturedAt))} alle ${escapeHtml(fmtTime.format(new Date(archive.capturedAt)))}. Il dossier editoriale non era stato aperto prima del kickoff; il modello resta congelato e non viene ricalcolato.</p></div></section>${renderPowerAnalysis(archive.analysis)}`;
+  }
+  return `<section class="prematch-vault-empty">${icon('info')}<div><strong>Nessuna fotografia prematch salvata</strong><p>VANTAGGIO conserva solo ciò che è stato realmente osservato su questo dispositivo prima del kickoff. Non ricostruisce a posteriori un dossier che non esisteva.</p></div></section>`;
+}
+
 function captureSignalLifecycle(match, requestedStage = 'AUTO') {
   if (!match) return false;
   const key = `${match.league.id}:${match.id}`;
@@ -421,6 +477,7 @@ async function runKickoffWatch() {
         state.analyses[key] = analysisPayload.data;
         archivePreKickoffModel(match, analysisPayload.data);
         state.intelligence[key] = intelPayload.data;
+        capturePrematchVault(match);
         if (captureSignalLifecycle(match, `T-${threshold}`)) refreshMatchRoom(match);
         addChange('kickoff', `Kickoff Watch · ${threshold}'`, `Dossier ricontrollato: ${match.home.name}–${match.away.name}.`, match, `${threshold}:${intelPayload.data.generatedAt}`);
         if (!previousIntel?.lineups?.official && intelPayload.data.lineups?.official) addChange('lineup', 'Formazioni ufficiali pubblicate', `Gli undici di ${match.home.name}–${match.away.name} sono disponibili nel dossier.`, match, 'official');
@@ -588,10 +645,11 @@ async function loadPowerPicks() {
   if (state.currentView === 'dashboard') render();
   const results = await Promise.allSettled(candidates.map(match => {
     const key = `${match.league.id}:${match.id}`;
-    if (state.analyses[key]) return Promise.resolve({ match, analysis: state.analyses[key] });
+    if (state.analyses[key]) { capturePrematchVault(match); return Promise.resolve({ match, analysis: state.analyses[key] }); }
     return api(`/api/analysis?event=${encodeURIComponent(match.id)}&league=${encodeURIComponent(match.league.id)}`).then(payload => {
       state.analyses[key] = payload.data;
       archivePreKickoffModel(match, payload.data);
+      capturePrematchVault(match);
       return { match, analysis: payload.data };
     });
   }));
@@ -973,7 +1031,12 @@ function openMatch(id) {
   modal.style.setProperty('--league-color', match.league.accent || '#c8ff52');
   const preWindowClosed = match.state === 'pre' && new Date(match.date).getTime() <= Date.now();
   if (match.state === 'in' || preWindowClosed) {
-    modal.innerHTML = `<button class="modal-close" data-close-modal aria-label="Chiudi">${icon('x')}</button><header class="modal-hero"><span class="modal-competition"><i></i>${escapeHtml(match.league.label)}</span><div class="modal-fixture"><div class="modal-team">${teamLogo(match.home, 'modal-logo')}<strong>${escapeHtml(match.home.name)}</strong></div><div class="modal-score"><strong>${escapeHtml(status.main)}</strong><span>${escapeHtml(status.sub)}</span></div><div class="modal-team">${teamLogo(match.away, 'modal-logo')}<strong>${escapeHtml(match.away.name)}</strong></div></div></header><div class="modal-body"><section class="score-only-live">${icon('ball')}<div><span>SCORE ESSENZIALE</span><h3>${preWindowClosed ? 'Finestra pre-match chiusa' : 'Analisi live disattivata'}</h3><p>${preWindowClosed ? 'L’orario di kickoff è trascorso ma il feed non ha ancora confermato lo stato. Il dossier resta chiuso per evitare analisi fuori tempo.' : 'Durante la gara VANTAGGIO mostra soltanto squadre, punteggio, minuto e stato. Ricerca, segnali e dossier sono disponibili esclusivamente prima del kickoff.'}</p></div></section><div class="modal-actions"><button class="button primary" data-close-modal>Chiudi</button></div></div>`;
+    const archive = archivedPrematchData(match);
+    const key = `${match.league.id}:${match.id}`;
+    if (archive?.analysis) state.analyses[key] = archive.analysis;
+    if (archive?.intelligence) state.intelligence[key] = archive.intelligence;
+    const archiveBody = renderPrematchVault(archive);
+    modal.innerHTML = `<button class="modal-close" data-close-modal aria-label="Chiudi">${icon('x')}</button><header class="modal-hero"><span class="modal-competition"><i></i>${escapeHtml(match.league.label)}</span><div class="modal-fixture"><div class="modal-team">${teamLogo(match.home, 'modal-logo')}<strong>${escapeHtml(match.home.name)}</strong></div><div class="modal-score"><strong>${escapeHtml(status.main)}</strong><span>${escapeHtml(status.sub)}</span></div><div class="modal-team">${teamLogo(match.away, 'modal-logo')}<strong>${escapeHtml(match.away.name)}</strong></div></div></header><div class="modal-body"><section class="score-only-live">${icon('ball')}<div><span>STATO GARA</span><h3>${preWindowClosed ? 'Finestra pre-match chiusa' : 'Analisi live disattivata'}</h3><p>${preWindowClosed ? 'Il feed non ha ancora confermato lo stato. Le informazioni prematch eventualmente salvate restano congelate.' : 'Il live mostra solo score, minuto e stato. Sotto resta la fotografia prematch, senza segnali o ricalcoli durante la gara.'}</p></div></section>${archiveBody}<div class="modal-actions"><button class="button primary" data-close-modal>Chiudi</button></div></div>`;
     $('#modalLayer').hidden = false;
     document.body.style.overflow = 'hidden';
     setTimeout(() => $('.modal-close', modal)?.focus(), 20);
@@ -1015,6 +1078,7 @@ async function loadAnalysis(match, force = false) {
   const activeModelRoot = () => $('#roomPowerMount') || $('#advancedAnalysis');
   if (state.analyses[key] && !force) {
     archivePreKickoffModel(match, state.analyses[key]);
+    capturePrematchVault(match);
     captureSignalLifecycle(match);
     refreshMatchRoom(match);
     const root = activeModelRoot();
@@ -1026,6 +1090,7 @@ async function loadAnalysis(match, force = false) {
     state.analyses[key] = payload.data;
     delete state.analysisErrors[key];
     archivePreKickoffModel(match, payload.data);
+    capturePrematchVault(match);
     captureSignalLifecycle(match);
     refreshMatchRoom(match);
     if ($('#matchModal')?.dataset.eventId === match.id && activeModelRoot()) activeModelRoot().innerHTML = renderPowerAnalysis(payload.data);
@@ -1097,6 +1162,7 @@ async function loadIntelligence(match, force = false) {
   const root = $('#matchIntelligence');
   if (!root) return;
   if (state.intelligence[key] && !force) {
+    capturePrematchVault(match);
     root.innerHTML = renderIntelligence(state.intelligence[key]);
     return;
   }
@@ -1104,6 +1170,7 @@ async function loadIntelligence(match, force = false) {
     const previous = state.intelligence[key];
     const payload = await api(`/api/intelligence?event=${encodeURIComponent(match.id)}&league=${encodeURIComponent(match.league.id)}${force ? '&fresh=1' : ''}`);
     state.intelligence[key] = payload.data;
+    capturePrematchVault(match);
     captureSignalLifecycle(match);
     if ($('#matchIntelligence')) { delete $('#matchIntelligence').dataset.fallback; delete $('#matchIntelligence').dataset.error; }
     if (!previous?.lineups?.official && payload.data.lineups?.official) addChange('lineup', 'Formazioni ufficiali pubblicate', `Gli undici di ${match.home.name}–${match.away.name} sono disponibili nel dossier.`, match, 'official');
@@ -1134,17 +1201,34 @@ function leaderIntelCard(block) {
   return `<article class="leader-intel-card"><header>${teamLogo({ name: block.teamName, logo: block.logo, abbreviation: block.teamName.slice(0, 3) }, 'intel-team-logo')}<strong>${escapeHtml(block.teamName)}</strong></header>${categories.map(category => { const player = category.players[0]; return `<div class="leader-row"><span>${escapeHtml(labels[category.id] || category.label)}</span><div><strong>${escapeHtml(player.name)}</strong><small>${escapeHtml(player.position)} ${player.jersey ? `· #${escapeHtml(player.jersey)}` : ''}</small></div><b>${escapeHtml(player.value)}</b></div>`; }).join('')}</article>`;
 }
 
-function availabilityDesk(availability) {
+function availabilityDesk(availability, archiveMode = false) {
   if (!availability?.teams) return `<div class="availability-state">${icon('shield')}<div><strong>Availability Intelligence non disponibile</strong><p>Lo stato della rosa resta sconosciuto: il silenzio non viene interpretato come piena disponibilità.</p></div></div>`;
   const sourceState = value => ({ disponibile: 'disponibile', in_attesa: 'in attesa', non_applicabile: 'non applicabile', nessun_record_pubblicato: 'feed vuoto · non conclusivo', non_disponibile: 'non disponibile', nessun_segnale: 'nessun segnale' })[value] || value.replaceAll('_', ' ');
   const teams = availability.teams.map(team => `<article class="availability-team"><header><div><span>${escapeHtml(team.teamName)}</span><strong>${team.structured.length} registrati · ${(team.signals || []).length} segnali${team.lineupOverrides?.length ? ` · ${team.lineupOverrides.length} superati dall’XI` : ''}</strong></div></header><div class="availability-players">${team.structured.length ? team.structured.map(item => `<div class="availability-player"><span class="availability-kind ${escapeHtml(item.category)}">${escapeHtml(item.category)}</span><div><strong>${escapeHtml(item.player)}</strong><p>${escapeHtml(item.detail)}</p><small>${escapeHtml(item.source)} · livello ${item.tier}${item.updatedAt ? ` · ${escapeHtml(displayNewsDate(item.updatedAt))}` : ''}${item.chance != null ? ` · chance dataset ${item.chance}%` : ''}</small></div></div>`).join('') : `<p class="availability-unknown">Nessun record strutturato pubblicato per questa squadra. Non significa rosa al completo.</p>`}</div>${(team.signals || []).length ? `<div class="availability-signals">${team.signals.slice(0, 3).map(item => `<button data-news-url="${escapeHtml(safeUrl(item.link))}"><span>${item.corroboratedBy ? `RISCONTRO · ${item.corroboratedBy + 1} EDITORI` : item.reliability === 'forte' ? 'FONTE FORTE' : item.reliability === 'media' ? 'FONTE NOTA' : 'DA VERIFICARE'}</span><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml(item.publisher)} · ${escapeHtml(displayNewsDate(item.published))}</small></button>`).join('')}</div>` : ''}</article>`).join('');
-  return `<section class="availability-desk"><header><div><span>AVAILABILITY INTELLIGENCE</span><h4>Infortuni, squalifiche, dubbi e stato lineup</h4><p>${escapeHtml(availability.message)}</p></div><b>${availability.score}/100 · ${escapeHtml(availability.level)}</b></header><div class="availability-teams">${teams}</div><div class="availability-sources">${(availability.sources || []).map(source => `<span><i class="tier-${source.tier}">T${source.tier}</i><strong>${escapeHtml(source.label)}</strong><small>${escapeHtml(sourceState(source.state))}${source.updatedAt ? ` · ${escapeHtml(relativeTime(source.updatedAt))}` : ''}</small></span>`).join('')}</div><footer>${icon('shield')}<span>${escapeHtml(availability.rule)}</span></footer></section>`;
+  return `<section class="availability-desk"><header><div><span>AVAILABILITY INTELLIGENCE</span><h4>Infortuni, squalifiche, dubbi e stato lineup</h4><p>${archiveMode ? 'Fotografia al salvataggio prematch · ' : ''}${escapeHtml(availability.message)}</p></div><b>${availability.score}/100 · ${escapeHtml(availability.level)}</b></header><div class="availability-teams">${teams}</div><div class="availability-sources">${(availability.sources || []).map(source => `<span><i class="tier-${source.tier}">T${source.tier}</i><strong>${escapeHtml(source.label)}</strong><small>${escapeHtml(sourceState(source.state))}${source.updatedAt ? archiveMode ? ` · fonte del ${escapeHtml(displayNewsDate(source.updatedAt))}` : ` · ${escapeHtml(relativeTime(source.updatedAt))}` : ''}</small></span>`).join('')}</div><footer>${icon('shield')}<span>${escapeHtml(availability.rule)}</span></footer></section>`;
 }
 
-function lineupIntel(data, availability) {
-  const availabilityBox = availabilityDesk(availability);
-  if (!data.official) return `<div class="lineup-pending">${icon('clock')}<div><strong>Formazioni non ancora ufficiali</strong><p>${escapeHtml(data.message)}</p><span>Questo è un punto da verificare, non un dato da indovinare.</span></div></div>${availabilityBox}`;
-  return `<div class="official-lineups">${data.teams.map(team => `<article><header><strong>${escapeHtml(team.teamName)}</strong><span>${escapeHtml(team.formation || 'Modulo n/d')}</span></header><div>${team.starters.map(player => `<p><b>${escapeHtml(player.jersey || '–')}</b><span>${escapeHtml(player.name)}</span><small>${escapeHtml(player.position)}</small></p>`).join('')}</div></article>`).join('')}</div>${availabilityBox}`;
+function lineupTeamCard(team) {
+  const score = (label, value, note) => `<span><small>${escapeHtml(label)}</small><strong>${value == null ? '–' : value}</strong><em>${escapeHtml(note)}</em></span>`;
+  const modeLabel = team.mode === 'ufficiale' ? 'XI UFFICIALE' : team.mode === 'probabile' ? 'XI PROBABILE' : 'NON PUBBLICABILE';
+  const selected = (team.selected || []).map(player => {
+    const evidence = player.importanceEvidence?.[0] || '';
+    const stateText = team.mode === 'ufficiale' ? player.position || '' : `${player.estimatedStart}% stima`;
+    return `<p><b>${escapeHtml(player.jersey || player.position || '–')}</b><span>${escapeHtml(player.name)}${player.importance >= 62 ? `<i>${escapeHtml(player.importanceLabel)}</i>` : ''}</span><small title="${escapeHtml(evidence)}">${escapeHtml(`${stateText}${evidence ? ` · ${evidence}` : ''}`)}</small></p>`;
+  }).join('');
+  const important = (team.importantMissing || []).map(item => `<article><span class="lineup-impact-score">${item.importance || '–'}</span><div><strong>${escapeHtml(item.player)} · ${escapeHtml(item.importanceLabel)}</strong><p>${escapeHtml(item.category)}${item.chance != null ? ` · chance dataset ${item.chance}%` : ''}</p><small>${escapeHtml((item.evidence || []).join(' · ') || item.detail || item.source || '')}</small></div></article>`).join('');
+  const omissions = (team.omissions || []).map(item => `<article class="omission"><span class="lineup-impact-score">${item.importance}</span><div><strong>${escapeHtml(item.player)} · ${escapeHtml(item.status)}</strong><p>${escapeHtml(item.detail)}</p>${item.evidence?.length ? `<small>${escapeHtml(item.evidence.join(' · '))}</small>` : ''}</div></article>`).join('');
+  const returns = (team.returns || []).map(item => `<p>${icon('shield')}<span><strong>${escapeHtml(item.player)}</strong>: ${escapeHtml(item.detail)}</span></p>`).join('');
+  return `<article class="xi-team-card"><header><div><strong>${escapeHtml(team.teamName)}</strong><small>${escapeHtml(team.formation || 'Modulo non verificato')}</small></div><b class="${escapeHtml(team.mode)}">${modeLabel}</b></header><div class="xi-scoreboard">${score('Affidabilità XI', team.confidence, team.mode === 'ufficiale' ? 'certezza' : 'stima')}${score('Forza disponibile', team.strength, 'vs nucleo')}${score('Continuità', team.continuity, 'vs ultimo XI')}</div>${selected ? `<details class="xi-list" open><summary><strong>${team.mode === 'ufficiale' ? 'Titolari confermati' : 'Probabile formazione automatica'}</strong><span>${team.selected.length}/11</span></summary><div>${selected}</div></details>` : `<div class="xi-unavailable">${icon('info')}<span>Campione insufficiente: nessun nome viene aggiunto per completare artificialmente l’undici.</span></div>`}${important ? `<section class="xi-impact"><header><span>DISPONIBILITÀ · NOMI IMPORTANTI</span><small>assente, dubbio o in panchina</small></header>${important}</section>` : `<div class="xi-clear">${icon('shield')}<span>Nessuna assenza importante dimostrabile con le fonti disponibili. Non equivale a rosa completa.</span></div>`}${omissions ? `<section class="xi-impact"><header><span>ESCLUSIONI DALL’XI</span><small>panchina o fuori distinta</small></header>${omissions}</section>` : ''}${returns ? `<div class="xi-returns">${returns}</div>` : ''}<footer><span>${escapeHtml((team.evidence || []).join(' · ') || 'Copertura ridotta')}</span><p>${escapeHtml(team.note || '')}</p></footer></article>`;
+}
+
+function lineupIntel(data, availability, intelligence, archiveMode = false) {
+  const availabilityBox = availabilityDesk(availability, archiveMode);
+  if (!intelligence?.teams?.length) {
+    if (!data.official) return `<div class="lineup-pending">${icon('clock')}<div><strong>Formazioni non ancora ufficiali</strong><p>${escapeHtml(data.message)}</p><span>Il campione gratuito non permette ancora una probabile affidabile.</span></div></div>${availabilityBox}`;
+    return `<div class="official-lineups">${data.teams.map(team => `<article><header><strong>${escapeHtml(team.teamName)}</strong><span>${escapeHtml(team.formation || 'Modulo n/d')}</span></header><div>${team.starters.map(player => `<p><b>${escapeHtml(player.jersey || '–')}</b><span>${escapeHtml(player.name)}</span><small>${escapeHtml(player.position)}</small></p>`).join('')}</div></article>`).join('')}</div>${availabilityBox}`;
+  }
+  return `<section class="xi-intelligence"><header><div><span>XI INTELLIGENCE</span><h4>Chi parte, chi manca e quanto è solido l’undici</h4><p>Affidabilità della previsione e forza disponibile sono due misure diverse: nessuna delle due è una probabilità di vittoria.</p></div><b>${intelligence.official ? 'UFFICIALI' : 'PREVISIONE'}</b></header><div class="xi-team-grid">${intelligence.teams.map(lineupTeamCard).join('')}</div><footer>${icon('shield')}<span>${escapeHtml(intelligence.rule || intelligence.methodology || '')}</span></footer></section>${availabilityBox}`;
 }
 
 function deepTeamCase(block) {
@@ -1216,11 +1300,12 @@ function readinessAssessment(data) {
       checks: [{ tone: 'good', label: 'Stato', value: data.event?.status?.clock || 'In corso' }]
     };
   }
+  const referenceTime = data.archiveMode ? new Date(data.archiveSnapshotAt || data.generatedAt).getTime() : Date.now();
   const kickoffTime = new Date(data.event?.date).getTime();
-  const minutes = Number.isFinite(kickoffTime) ? (kickoffTime - Date.now()) / 60000 : Infinity;
+  const minutes = Number.isFinite(kickoffTime) ? (kickoffTime - referenceTime) / 60000 : Infinity;
   const sample = (data.tactical?.home?.observedGames || 0) + (data.tactical?.away?.observedGames || 0);
-  const generatedTime = new Date(data.generatedAt || data.engine?.generatedAt || Date.now()).getTime();
-  const ageMinutes = Number.isFinite(generatedTime) ? Math.max(0, (Date.now() - generatedTime) / 60000) : 999;
+  const generatedTime = new Date(data.generatedAt || data.engine?.generatedAt || referenceTime).getTime();
+  const ageMinutes = Number.isFinite(generatedTime) ? Math.max(0, (referenceTime - generatedTime) / 60000) : 999;
   const availabilityScore = Number(data.availability?.score || 0);
   const reliabilityScore = Number(data.reliability?.overall || 0);
   const lineupScore = data.lineups?.official ? 100 : minutes <= 75 ? 20 : 55;
@@ -1231,16 +1316,17 @@ function readinessAssessment(data) {
     { label: 'Disponibilità', value: `${availabilityScore}/100`, tone: availabilityScore >= 65 ? 'good' : availabilityScore >= 45 ? 'warn' : 'bad' },
     { label: 'Affidabilità', value: `${reliabilityScore}/100`, tone: reliabilityScore >= 65 ? 'good' : reliabilityScore >= 45 ? 'warn' : 'bad' },
     { label: 'Campione', value: `${sample} boxscore`, tone: sample >= 4 ? 'good' : sample >= 2 ? 'warn' : 'bad' },
-    { label: 'Freschezza', value: ageMinutes < 2 ? 'Adesso' : `${Math.round(ageMinutes)} min`, tone: ageMinutes <= 20 ? 'good' : ageMinutes <= 60 ? 'warn' : 'bad' }
+    { label: 'Freschezza', value: data.archiveMode ? ageMinutes < 2 ? 'Al salvataggio' : `${Math.round(ageMinutes)} min al salvataggio` : ageMinutes < 2 ? 'Adesso' : `${Math.round(ageMinutes)} min`, tone: ageMinutes <= 20 ? 'good' : ageMinutes <= 60 ? 'warn' : 'bad' }
   ];
   const bad = checks.filter(check => check.tone === 'bad').length;
   const warnings = checks.filter(check => check.tone === 'warn').length;
   const tone = bad >= 2 ? 'blocked' : bad || warnings >= 2 ? 'caution' : 'ready';
+  const readinessTitle = tone === 'ready' ? 'Pronta per una decisione informata' : tone === 'caution' ? 'Decisione possibile, ma con riserve' : 'Non pronta: troppe prove mancanti';
   return {
-    mode: 'pre', tone,
-    title: tone === 'ready' ? 'Pronta per una decisione informata' : tone === 'caution' ? 'Decisione possibile, ma con riserve' : 'Non pronta: troppe prove mancanti',
-    badge: tone === 'ready' ? 'PRONTA' : tone === 'caution' ? 'CAUTELA' : 'ATTENDI',
-    description: 'Il gate misura se le evidenze sono mature; non promette il risultato e non sostituisce il controllo delle fonti.',
+    mode: data.archiveMode ? 'archive' : 'pre', tone,
+    title: data.archiveMode ? `Fotografia prematch: ${readinessTitle.toLowerCase()}` : readinessTitle,
+    badge: data.archiveMode ? 'CONGELATA' : tone === 'ready' ? 'PRONTA' : tone === 'caution' ? 'CAUTELA' : 'ATTENDI',
+    description: data.archiveMode ? 'Valutazione registrata al momento del salvataggio: non descrive la situazione live e non viene aggiornata.' : 'Il gate misura se le evidenze sono mature; non promette il risultato e non sostituisce il controllo delle fonti.',
     maturity: Math.round((lineupScore + availabilityScore + reliabilityScore + sampleScore + freshnessScore) / 5),
     checks
   };
@@ -1266,7 +1352,7 @@ function summaryWatchMarkup(data) {
   const watch = data.deepDive?.watchlist || [];
   const alerts = data.alerts || [];
   if (!watch.length && !alerts.length) return '';
-  return `<section class="summary-watch"><header><span class="section-code">DECISION WATCH</span><h4>Cosa può cambiare la lettura</h4></header><div>${alerts.slice(0, 3).map(alert => `<article class="${escapeHtml(alert.level)}">${icon('info')}<div><strong>${escapeHtml(alert.title)}</strong><p>${escapeHtml(alert.text)}</p></div></article>`).join('')}${watch.slice(0, 3).map(text => `<article>${icon('radar')}<div><strong>Da monitorare</strong><p>${escapeHtml(text)}</p></div></article>`).join('')}</div></section>`;
+  return `<section class="summary-watch"><header><span class="section-code">DECISION WATCH</span><h4>${data.archiveMode ? 'Cosa poteva cambiare la lettura' : 'Cosa può cambiare la lettura'}</h4></header><div>${alerts.slice(0, 3).map(alert => `<article class="${escapeHtml(alert.level)}">${icon('info')}<div><strong>${escapeHtml(alert.title)}</strong><p>${escapeHtml(alert.text)}</p></div></article>`).join('')}${watch.slice(0, 3).map(text => `<article>${icon('radar')}<div><strong>Da monitorare</strong><p>${escapeHtml(text)}</p></div></article>`).join('')}</div></section>`;
 }
 
 function lifecycleDelta(previous, current) {
@@ -1291,7 +1377,7 @@ function lifecycleDelta(previous, current) {
 function signalLifecycleMarkup(data) {
   const lifecycle = state.signalLifecycle[String(data.event.id)];
   const snapshots = lifecycle?.snapshots || [];
-  if (!snapshots.length) return `<section class="signal-lifecycle empty"><header><div><span class="section-code">SIGNAL LIFECYCLE</span><h4>Come cambia la lettura prima del via</h4></div><small>Archivio locale</small></header><div class="lifecycle-empty">${icon('clock')}<div><strong>Prima fotografia in preparazione</strong><p>La timeline si attiva quando modello e Intelligence sono disponibili prima del kickoff. Nessun dato viene ricostruito a posteriori.</p></div></div></section>`;
+  if (!snapshots.length) return `<section class="signal-lifecycle empty"><header><div><span class="section-code">SIGNAL LIFECYCLE</span><h4>Come cambia la lettura prima del via</h4></div><small>Archivio locale</small></header><div class="lifecycle-empty">${icon('clock')}<div><strong>${data.archiveMode ? 'Timeline non osservata prima del kickoff' : 'Prima fotografia in preparazione'}</strong><p>${data.archiveMode ? 'Il Vault non crea checkpoint retroattivi durante la gara.' : 'La timeline si attiva quando modello e Intelligence sono disponibili prima del kickoff. Nessun dato viene ricostruito a posteriori.'}</p></div></div></section>`;
   const stageLabel = snapshot => snapshot.first ? (snapshot.stage.startsWith('T-') ? `PRIMA · ${snapshot.stage}` : 'PRIMA LETTURA') : snapshot.stage === 'UPDATE' ? 'AGGIORNAMENTO' : snapshot.stage;
   const cards = snapshots.map((snapshot, index) => {
     const delta = lifecycleDelta(snapshots[index - 1], snapshot);
@@ -1313,6 +1399,9 @@ function prematchTotalIntelligence(data) {
   const restKnown = [data.calendar?.home?.restDays, data.calendar?.away?.restDays].filter(value => value != null).length;
   const strongNews = (data.news?.articles || []).filter(article => article.reliability === 'forte').length;
   const contextConflict = contextDateConflict(data);
+  const xiTeams = data.lineupIntelligence?.teams || [];
+  const probableTeams = xiTeams.filter(team => team.mode === 'probabile').length;
+  const importantStatuses = xiTeams.reduce((sum, team) => sum + (team.importantMissing || []).length, 0);
   const status = (tone, label) => ({ tone, label });
   const items = [
     {
@@ -1335,15 +1424,15 @@ function prematchTotalIntelligence(data) {
     },
     {
       title: 'Rosa, assenze e formazioni', tab: 'teams',
-      state: data.lineups?.official && data.availability?.score >= 65 ? status('full', 'Verificato') : data.lineups?.official || data.availability?.structuredCount || data.availability?.signalCount ? status('partial', 'Da aggiornare') : status('missing', 'Non documentato'),
-      headline: data.lineups?.official ? 'Undici ufficiali disponibili' : `${data.availability?.structuredCount || 0} status · ${data.availability?.signalCount || 0} segnali`,
-      detail: data.availability?.message || 'Stato delle rose non documentato.'
+      state: data.lineups?.official && data.availability?.score >= 65 ? status('full', 'Verificato') : probableTeams === 2 || data.availability?.structuredCount || data.availability?.signalCount ? status('partial', 'Da aggiornare') : status('missing', 'Non documentato'),
+      headline: data.lineups?.official ? `XI ufficiali · ${importantStatuses} nomi importanti segnalati` : probableTeams ? `${probableTeams}/2 probabili · ${importantStatuses} nomi importanti segnalati` : `${data.availability?.structuredCount || 0} status · ${data.availability?.signalCount || 0} segnali`,
+      detail: xiTeams.length ? xiTeams.map(team => `${team.teamName}: XI ${team.confidence ?? '–'}/100 · forza ${team.strength ?? '–'}/100`).join(' · ') : data.availability?.message || 'Stato delle rose non documentato.'
     },
     {
       title: 'Modello, scenari e mercato', tab: 'numbers',
-      state: model?.probabilities && model?.market?.outcome ? status('full', 'Modello + mercato') : model?.probabilities ? status('partial', 'Solo modello') : modelError ? status('missing', 'Non disponibile') : status('partial', 'In caricamento'),
-      headline: model?.signals?.[0] ? `${model.signals[0].label} · ${model.signals[0].probability}%` : modelError ? 'Lettura quantitativa non raggiungibile' : 'Lettura quantitativa in preparazione',
-      detail: model?.market?.outcome ? `Consenso mercato presente: ${model.market.provider}.` : modelError ? `Errore dichiarato: ${modelError}.` : 'Mercato non pubblicato dal provider: nessuna quota viene inventata.'
+      state: model?.probabilities && model?.market?.outcome ? status('full', 'Modello + mercato') : model?.probabilities ? status('partial', 'Solo modello') : modelError || data.archiveMode ? status('missing', data.archiveMode ? 'Non osservato' : 'Non disponibile') : status('partial', 'In caricamento'),
+      headline: model?.signals?.[0] ? `${model.signals[0].label} · ${model.signals[0].probability}%` : data.archiveMode ? 'Nessun modello salvato prima del via' : modelError ? 'Lettura quantitativa non raggiungibile' : 'Lettura quantitativa in preparazione',
+      detail: model?.market?.outcome ? `Consenso mercato presente: ${model.market.provider}.` : data.archiveMode ? 'Il Vault non completa questa area dopo il kickoff.' : modelError ? `Errore dichiarato: ${modelError}.` : 'Mercato non pubblicato dal provider: nessuna quota viene inventata.'
     },
     {
       title: 'Fonti, news e punti oscuri', tab: 'verify',
@@ -1364,14 +1453,14 @@ function matchRoomSummary(data) {
 
 function matchRoomTeams(data) {
   const deep = data.deepDive || {};
-  return `<div class="match-room-pane teams-pane"><section class="room-group"><header><span class="section-code">TEAM PICTURE</span><h3>Identità e forma, nello stesso posto</h3><p>Season Vault, forma recente e profilo tecnico non sono più separati nel dossier.</p></header><div class="deep-team-grid">${(deep.teamCases || []).map(deepTeamCase).join('') || '<div class="intel-empty">Profili squadra non disponibili.</div>'}</div></section><section class="room-group"><header><span class="section-code">TACTICAL MATCHUP</span><h3>Stili e incrocio tecnico</h3></header><div class="tactical-grid">${tacticalCard(data.tactical.home, data.event.home)}${tacticalCard(data.tactical.away, data.event.away)}</div><div class="matchup-box"><span>INCROCIO DI STILI</span>${(data.tactical.matchup || []).map(text => `<p>${escapeHtml(text)}</p>`).join('')}</div></section><section class="room-group"><header><span class="section-code">SCHEDULE & AVAILABILITY</span><h3>Calendario, undici e disponibilità</h3></header><div class="calendar-intel-grid">${calendarIntelCard(data.calendar.home, data.event.home)}${calendarIntelCard(data.calendar.away, data.event.away)}</div>${lineupIntel(data.lineups, data.availability)}</section></div>`;
+  return `<div class="match-room-pane teams-pane"><section class="room-group"><header><span class="section-code">TEAM PICTURE</span><h3>Identità e forma, nello stesso posto</h3><p>Season Vault, forma recente e profilo tecnico non sono più separati nel dossier.</p></header><div class="deep-team-grid">${(deep.teamCases || []).map(deepTeamCase).join('') || '<div class="intel-empty">Profili squadra non disponibili.</div>'}</div></section><section class="room-group"><header><span class="section-code">TACTICAL MATCHUP</span><h3>Stili e incrocio tecnico</h3></header><div class="tactical-grid">${tacticalCard(data.tactical.home, data.event.home)}${tacticalCard(data.tactical.away, data.event.away)}</div><div class="matchup-box"><span>INCROCIO DI STILI</span>${(data.tactical.matchup || []).map(text => `<p>${escapeHtml(text)}</p>`).join('')}</div></section><section class="room-group"><header><span class="section-code">SCHEDULE & AVAILABILITY</span><h3>Calendario, undici e disponibilità</h3></header><div class="calendar-intel-grid">${calendarIntelCard(data.calendar.home, data.event.home)}${calendarIntelCard(data.calendar.away, data.event.away)}</div>${lineupIntel(data.lineups, data.availability, data.lineupIntelligence, data.archiveMode)}</section></div>`;
 }
 
 function matchRoomNumbers(data) {
   const key = `${data.event.leagueId}:${data.event.id}`;
   const model = state.analyses[key];
   const modelError = state.analysisErrors[key];
-  const modelContent = model ? renderPowerAnalysis(model) : modelError ? `<section class="power-error">${icon('info')}<div><strong>Analisi avanzata non disponibile</strong><p>${escapeHtml(modelError)}. Restano validi calendario, forma e dati prematch già verificati.</p></div></section>` : analysisLoading();
+  const modelContent = model ? renderPowerAnalysis(model) : modelError ? `<section class="power-error">${icon('info')}<div><strong>Analisi avanzata non disponibile</strong><p>${escapeHtml(modelError)}. Restano validi calendario, forma e dati prematch già verificati.</p></div></section>` : data.archiveMode ? `<section class="power-error neutral">${icon('info')}<div><strong>Modello non osservato prima del kickoff</strong><p>Il Vault non ricostruisce probabilità a partita iniziata.</p></div></section>` : analysisLoading();
   const tournamentMarkup = (data.tournamentStats || []).length ? `<div class="tournament-intel"><span class="section-overline">NUMERI NEL TORNEO</span><div>${data.tournamentStats.map(team => `<article>${teamLogo(team, 'intel-team-logo')}<strong>${escapeHtml(team.name)}</strong><span><b>${team.goals ?? '–'}</b>gol</span><span><b>${team.conceded ?? '–'}</b>subiti</span><span><b>${team.goalDifference == null ? '–' : team.goalDifference > 0 ? `+${team.goalDifference}` : team.goalDifference}</b>diff.</span></article>`).join('')}</div></div>` : '';
   return `<div class="match-room-pane numbers-pane"><section class="room-group model-room-group"><header><span class="section-code">POWER MODEL 2.1</span><h3>Modello, probabilità e campione</h3><p>Il modello vive qui soltanto: è valutabile prima del kickoff e dopo il finale resta solo come fotografia storica non ricalcolata.</p></header><div id="roomPowerMount">${modelContent}</div></section><section class="room-group"><header><span class="section-code">TOURNAMENT DATA</span><h3>Numeri e giocatori della competizione</h3></header>${tournamentMarkup}<div class="leaders-intel-grid">${(data.leaders || []).map(leaderIntelCard).join('') || '<div class="intel-empty">Leader del torneo non disponibili nel feed.</div>'}</div></section></div>`;
 }
@@ -1402,22 +1491,22 @@ function renderIntelligence(data) {
   const evidence = collectEvidence(data);
   const eventId = String(data.event.id);
   const active = state.matchRoomTabs[eventId] || 'summary';
-  const stateMode = data.event.state === 'post' || data.event.completed ? 'post' : 'pre';
+  const stateMode = data.archiveMode ? 'archive' : data.event.state === 'post' || data.event.completed ? 'post' : 'pre';
   const tabs = [
-    { id: 'summary', label: 'Sintesi', meta: stateMode === 'post' ? 'Review' : 'Decisione' },
-    { id: 'teams', label: 'Squadre', meta: data.lineups?.official ? 'XI ufficiali' : `${data.availability?.structuredCount || 0} status` },
+    { id: 'summary', label: 'Sintesi', meta: stateMode === 'post' ? 'Review' : stateMode === 'archive' ? 'Congelata' : 'Decisione' },
+    { id: 'teams', label: 'Squadre', meta: data.lineups?.official ? 'XI ufficiali' : data.lineupIntelligence?.teams?.some(team => team.mode === 'probabile') ? 'XI probabili' : `${data.availability?.structuredCount || 0} status` },
     { id: 'numbers', label: 'Numeri', meta: `fonti ${data.reliability?.overall ?? '–'}/100` },
     { id: 'verify', label: 'Verifiche', meta: `${evidence.unknown.length} aperte` }
   ];
   const panes = { summary: matchRoomSummary, teams: matchRoomTeams, numbers: matchRoomNumbers, verify: matchRoomVerify };
-  return `<section class="match-control-room ${stateMode}"><header class="control-room-head"><div><span class="intel-mark">MATCH CONTROL ROOM</span><h3>${stateMode === 'post' ? 'Review organizzata' : 'Decisione, prove, dettagli'}</h3><p>Quattro aree, una sola posizione per ogni informazione.</p></div><div class="intel-live"><i></i>AFFIDABILITÀ ${data.reliability?.overall ?? '–'}/100</div></header><div class="match-room-tabs" role="tablist" aria-label="Aree del dossier">${tabs.map(tab => `<button id="room-tab-${tab.id}-${eventId}" role="tab" aria-selected="${active === tab.id}" aria-controls="room-panel-${eventId}" tabindex="${active === tab.id ? '0' : '-1'}" class="${active === tab.id ? 'active' : ''}" data-room-tab="${tab.id}" data-room-event="${eventId}"><span>${escapeHtml(tab.label)}</span><small>${escapeHtml(tab.meta)}</small></button>`).join('')}</div><section id="room-panel-${eventId}" class="match-room-panel" role="tabpanel" aria-labelledby="room-tab-${active}-${eventId}">${(panes[active] || panes.summary)(data)}</section></section>`;
+  return `<section class="match-control-room ${stateMode}"><header class="control-room-head"><div><span class="intel-mark">MATCH CONTROL ROOM</span><h3>${stateMode === 'post' ? 'Review organizzata' : stateMode === 'archive' ? 'Dossier prematch congelato' : 'Decisione, prove, dettagli'}</h3><p>Quattro aree, una sola posizione per ogni informazione.</p></div><div class="intel-live"><i></i>AFFIDABILITÀ ${data.reliability?.overall ?? '–'}/100</div></header><div class="match-room-tabs" role="tablist" aria-label="Aree del dossier">${tabs.map(tab => `<button id="room-tab-${tab.id}-${eventId}" role="tab" aria-selected="${active === tab.id}" aria-controls="room-panel-${eventId}" tabindex="${active === tab.id ? '0' : '-1'}" class="${active === tab.id ? 'active' : ''}" data-room-tab="${tab.id}" data-room-event="${eventId}"><span>${escapeHtml(tab.label)}</span><small>${escapeHtml(tab.meta)}</small></button>`).join('')}</div><section id="room-panel-${eventId}" class="match-room-panel" role="tabpanel" aria-labelledby="room-tab-${active}-${eventId}">${(panes[active] || panes.summary)(data)}</section></section>`;
 }
 
 function openInfo() {
   const modal = $('#matchModal');
   delete modal.dataset.eventId;
   modal.style.removeProperty('--league-color');
-  modal.innerHTML = `<button class="modal-close" data-close-modal aria-label="Chiudi">${icon('x')}</button><header class="modal-hero"><span class="modal-competition"><i></i>TRASPARENZA</span><div style="position:relative;z-index:1;margin-top:24px"><h2 style="margin:0 0 8px;font-size:26px">Dati gratuiti, metodo chiaro.</h2><p style="margin:0;color:rgba(255,255,255,.65);font-size:11px;line-height:1.5">Nessun abbonamento e nessuna chiave API a pagamento.</p></div></header><div class="modal-body"><section class="analysis-box"><div class="analysis-box-head"><span>Fonti attive</span><strong>Feed pubblici</strong></div><p>Partite, contesto, statistiche, calendari, classifiche, lineup e injury route: feed pubblici ESPN. Fantasy Premier League ufficiale aggiunge status e aggiornamenti per la sola Premier League. Google News fornisce titoli datati e link; ANSA, Football Italia ed ESPN alimentano la Newsroom.</p></section><section class="form-comparison"><h3>Come si aggiorna</h3><p style="color:var(--muted);font-size:10px;line-height:1.6">Le partite vengono ricontrollate ogni 90 secondi mentre il sito è aperto; le notizie ogni pochi minuti. A mezzanotte il calendario avanza automaticamente sul nuovo giorno nel fuso Europe/Rome. In caso di errore temporaneo, viene mantenuta l’ultima risposta valida in cache.</p><h3 style="margin-top:18px">Power Model 2.1 + Match Intelligence</h3><p style="color:var(--muted);font-size:10px;line-height:1.6">Il Power Model combina distribuzione di Poisson, forma, precedenti, fattore campo e consenso di mercato senza margine quando presente. Match Intelligence aggiunge fase e aggregato, riposo, carico gare, campioni tecnici recenti, giocatori chiave, formazioni ufficiali e news pertinenti. Ogni elemento è marcato come fatto, lettura derivata o dato da verificare. Nessun esito è garantito.</p><h3 style="margin-top:18px">Pre-Match Total Intelligence V4.7</h3><p style="color:var(--muted);font-size:10px;line-height:1.6">Il manifesto in Sintesi dichiara complete, parziali o non disponibili sei aree indispensabili e porta direttamente alle prove. A gara iniziata restano soltanto squadre, score, minuto e stato: nessun dossier, segnale o consiglio live.</p><h3 style="margin-top:18px">Signal Lifecycle V4.6</h3><p style="color:var(--muted);font-size:10px;line-height:1.6">Dentro la Sintesi, Signal Lifecycle conserva soltanto fotografie realmente pre-kickoff: prima lettura, aggiornamenti materiali e controlli T-60, T-30 e T-10 del Kickoff Watch. Mostra variazioni di readiness, probabilità, lineup, disponibilità e affidabilità; dopo il finale aggiunge il risultato senza ricalcolare il passato.</p></section><div class="modal-note">${icon('shield')}<span>Preferiti, tema e alert sono salvati localmente nel browser. Il sito non richiede account e non invia dati personali.</span></div><div class="modal-actions"><button class="button primary" data-close-modal>Ho capito</button></div></div>`;
+  modal.innerHTML = `<button class="modal-close" data-close-modal aria-label="Chiudi">${icon('x')}</button><header class="modal-hero"><span class="modal-competition"><i></i>TRASPARENZA</span><div style="position:relative;z-index:1;margin-top:24px"><h2 style="margin:0 0 8px;font-size:26px">Dati gratuiti, metodo chiaro.</h2><p style="margin:0;color:rgba(255,255,255,.65);font-size:11px;line-height:1.5">Nessun abbonamento e nessuna chiave API a pagamento.</p></div></header><div class="modal-body"><section class="analysis-box"><div class="analysis-box-head"><span>Fonti attive</span><strong>Feed pubblici</strong></div><p>Partite, contesto, statistiche, calendari, classifiche, lineup e injury route: feed pubblici ESPN. Fantasy Premier League ufficiale aggiunge status e aggiornamenti per la sola Premier League. Google News fornisce titoli datati e link; ANSA, Football Italia ed ESPN alimentano la Newsroom.</p></section><section class="form-comparison"><h3>Come si aggiorna</h3><p style="color:var(--muted);font-size:10px;line-height:1.6">Le partite vengono ricontrollate ogni 90 secondi mentre il sito è aperto; le notizie ogni pochi minuti. A mezzanotte il calendario avanza automaticamente sul nuovo giorno nel fuso Europe/Rome. In caso di errore temporaneo, viene mantenuta l’ultima risposta valida in cache.</p><h3 style="margin-top:18px">Power Model 2.1 + Match Intelligence</h3><p style="color:var(--muted);font-size:10px;line-height:1.6">Il Power Model combina distribuzione di Poisson, forma, precedenti, fattore campo e consenso di mercato senza margine quando presente. Match Intelligence aggiunge fase e aggregato, riposo, carico gare, campioni tecnici recenti, giocatori chiave, formazioni ufficiali e news pertinenti. Ogni elemento è marcato come fatto, lettura derivata o dato da verificare. Nessun esito è garantito.</p><h3 style="margin-top:18px">XI Intelligence + Pre-Match Vault V4.8</h3><p style="color:var(--muted);font-size:10px;line-height:1.6">Le probabili derivano da XI recenti pesati, ruoli e disponibilità; le ufficiali soltanto dagli starter pubblicati per l’evento. Affidabilità XI, Forza disponibile e Continuità sono misure distinte, mai probabilità di vittoria. Durante il live score e stato sono correnti, mentre il dossier già osservato prima del kickoff resta locale, congelato, timestampato e in sola lettura: nessuna ricalcolazione post-hoc.</p><h3 style="margin-top:18px">Pre-Match Total Intelligence V4.7</h3><p style="color:var(--muted);font-size:10px;line-height:1.6">Il manifesto in Sintesi dichiara complete, parziali o non disponibili sei aree indispensabili e porta direttamente alle prove. Il dossier prematch congelato non produce segnali o consigli live.</p><h3 style="margin-top:18px">Signal Lifecycle V4.6</h3><p style="color:var(--muted);font-size:10px;line-height:1.6">Dentro la Sintesi, Signal Lifecycle conserva soltanto fotografie realmente pre-kickoff: prima lettura, aggiornamenti materiali e controlli T-60, T-30 e T-10 del Kickoff Watch. Mostra variazioni di readiness, probabilità, lineup, disponibilità e affidabilità; dopo il finale aggiunge il risultato senza ricalcolare il passato.</p></section><div class="modal-note">${icon('shield')}<span>Preferiti, tema e alert sono salvati localmente nel browser. Il sito non richiede account e non invia dati personali.</span></div><div class="modal-actions"><button class="button primary" data-close-modal>Ho capito</button></div></div>`;
   $('#modalLayer').hidden = false;
   document.body.style.overflow = 'hidden';
 }
