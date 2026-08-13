@@ -55,7 +55,7 @@ function createNode() {
   context.globalThis = context;
 
   let source = fs.readFileSync('public/app.js', 'utf8').replace(/\ninit\(\);\s*$/, '\n');
-  source += '\nglobalThis.__test={state,safeUrl,teamLogo,newsCard,renderDashboard,renderMatchesView,renderRadarView,renderNewsView,renderStandingsView,renderFavoritesView,renderIntelligence,renderFallbackDeepAnalysis,renderPowerAnalysis,archivePreKickoffModel,reconcileModelSnapshots,modelTrackStats};';
+  source += '\nglobalThis.__test={state,safeUrl,teamLogo,newsCard,renderDashboard,renderMatchesView,renderRadarView,renderNewsView,renderStandingsView,renderFavoritesView,renderIntelligence,renderFallbackDeepAnalysis,renderPowerAnalysis,archivePreKickoffModel,reconcileModelSnapshots,modelTrackStats,readinessAssessment,captureSignalLifecycle,reconcileSignalLifecycles};';
   vm.runInNewContext(source, context, { filename: 'public/app.js' });
   const test = context.__test;
   test.state.today = status.today;
@@ -102,7 +102,7 @@ function createNode() {
     console.log(`✓ ${name.padEnd(12)} ${String(html.length).padStart(6)} caratteri`);
   }
 
-  if (!renders.roomSummary.includes('MATCH CONTROL ROOM') || !renders.roomSummary.includes('MATCH READINESS GATE') || !renders.roomSummary.includes('EVIDENCE MAP')) throw new Error('Sintesi Control Room non valida');
+  if (!renders.roomSummary.includes('MATCH CONTROL ROOM') || !renders.roomSummary.includes('MATCH READINESS GATE') || !renders.roomSummary.includes('EVIDENCE MAP') || !renders.roomSummary.includes('SIGNAL LIFECYCLE')) throw new Error('Sintesi Control Room non valida');
   if (!renders.roomTeams.includes('TACTICAL MATCHUP') || !renders.roomTeams.includes('AVAILABILITY INTELLIGENCE')) throw new Error('Area Squadre non raggruppata correttamente');
   if (!renders.roomNumbers.includes('POWER MODEL 2.1') || !renders.roomNumbers.includes('roomPowerMount')) throw new Error('Area Numeri non valida');
   if (!renders.roomVerify.includes('What Changed · storia della partita') || !renders.roomVerify.includes('Data Reliability Ledger') || !renders.roomVerify.includes('Fonti e news collegate')) throw new Error('Area Verifiche non valida');
@@ -140,8 +140,21 @@ function createNode() {
   test.archivePreKickoffModel({ ...modelMatch, id: 'post-hoc-block', state: 'post' }, analysisPayload.data);
   if (test.state.modelSnapshots['post-hoc-block']) throw new Error('Il Track Record accetta un output post-hoc');
 
+  const lifecycleMatch = { ...modelMatch, id: 'lifecycle-test' };
+  const lifecycleKey = `${lifecycleMatch.league.id}:${lifecycleMatch.id}`;
+  test.state.analyses[lifecycleKey] = { ...analysisPayload.data, event: { ...analysisPayload.data.event, id: lifecycleMatch.id, state: 'pre', date: lifecycleMatch.date }, probabilities: { home: 51, draw: 28, away: 21 } };
+  test.state.intelligence[lifecycleKey] = { ...intelligencePayload.data, event: { ...intelligencePayload.data.event, id: lifecycleMatch.id, state: 'pre', completed: false, date: lifecycleMatch.date }, generatedAt: new Date().toISOString(), lineups: { ...intelligencePayload.data.lineups, official: false }, availability: { ...intelligencePayload.data.availability, score: 48, structuredCount: 1 } };
+  if (!test.captureSignalLifecycle(lifecycleMatch) || test.state.signalLifecycle[lifecycleMatch.id]?.snapshots.length !== 1) throw new Error('Prima fotografia Signal Lifecycle non registrata');
+  test.state.intelligence[lifecycleKey] = { ...test.state.intelligence[lifecycleKey], lineups: { ...test.state.intelligence[lifecycleKey].lineups, official: true }, availability: { ...test.state.intelligence[lifecycleKey].availability, score: 72, structuredCount: 2 }, reliability: { ...test.state.intelligence[lifecycleKey].reliability, overall: 81 } };
+  if (!test.captureSignalLifecycle(lifecycleMatch, 'T-60') || test.state.signalLifecycle[lifecycleMatch.id].snapshots.length !== 2) throw new Error('Checkpoint T-60 non registrato');
+  const lifecycleHtml = test.renderIntelligence(test.state.intelligence[lifecycleKey]);
+  if (!lifecycleHtml.includes('Dal primo segnale al kickoff') || !lifecycleHtml.includes('XI ufficiali pubblicati') || !lifecycleHtml.includes('2 fotografie')) throw new Error('Signal Lifecycle non rende variazioni e checkpoint');
+  test.reconcileSignalLifecycles([{ ...lifecycleMatch, state: 'post', home: { ...lifecycleMatch.home, score: 1 }, away: { ...lifecycleMatch.away, score: 1 } }]);
+  if (test.state.signalLifecycle[lifecycleMatch.id]?.result?.homeScore !== 1) throw new Error('Signal Lifecycle non riconciliato con il finale');
+  if (test.captureSignalLifecycle({ ...lifecycleMatch, state: 'post' }, 'T-10')) throw new Error('Signal Lifecycle accetta uno snapshot post-hoc');
+
   const css = fs.readFileSync('public/styles.css', 'utf8');
-  for (const marker of ['@media (max-width: 720px)', '@media (max-width: 420px)', 'prefers-reduced-motion', '.deep-dive.fallback', '.preseason-reading', '.operations-deck', '.availability-desk', '.match-history', '.match-control-room', '.match-room-tabs', '.readiness-gate', '.evidence-map', '.deep-story p { margin: 0; color: var(--muted); font-size: 10.5px;']) {
+  for (const marker of ['@media (max-width: 720px)', '@media (max-width: 420px)', 'prefers-reduced-motion', '.deep-dive.fallback', '.preseason-reading', '.operations-deck', '.availability-desk', '.match-history', '.match-control-room', '.match-room-tabs', '.readiness-gate', '.evidence-map', '.signal-lifecycle', '.lifecycle-card', '.deep-story p { margin: 0; color: var(--muted); font-size: 10.5px;']) {
     if (!css.includes(marker)) throw new Error(`Regola CSS mancante: ${marker}`);
   }
   console.log('Frontend test completato: viste, dossier, URL, fallback grafici e pre-season validi.');

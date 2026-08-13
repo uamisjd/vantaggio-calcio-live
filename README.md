@@ -1,4 +1,4 @@
-# VANTAGGIO 4.5.0 — Match Control Room
+# VANTAGGIO 4.6.0 — Signal Lifecycle
 
 Portale calcistico responsive in italiano che unisce calendario globale, live score, probabilità e **Match Intelligence** in un’identità ibrida esclusiva: regia broadcast, data room e magazine editoriale. Funziona senza API a pagamento, senza account utente e senza dipendenze npm.
 
@@ -12,6 +12,15 @@ Portale calcistico responsive in italiano che unisce calendario globale, live sc
 - **Preferiti / My Matchroom**: countdown, prossimo evento, dossier consultati, alert e privacy locale.
 - **Scout Search**: ricerca trasversale di partite, squadre, competizioni e notizie con navigazione da tastiera.
 - **Match dossier / Control Room**: un’unica architettura adattiva raggruppa Sintesi, Squadre, Numeri e Verifiche; il Power Model vive soltanto nell’area Numeri.
+
+## Signal Lifecycle V4.6
+
+- **Timeline pre-kickoff nella Sintesi**: conserva la prima fotografia disponibile e i checkpoint Kickoff Watch T-60, T-30 e T-10, oltre agli aggiornamenti realmente materiali.
+- **Cosa viene congelato**: maturità del Readiness Gate, probabilità 1-X-2, segnale principale, stato lineup, Availability score e record rosa, Reliability score e campione tecnico.
+- **Delta leggibili**: ogni fotografia spiega cosa è cambiato rispetto alla precedente, per esempio XI ufficiali pubblicati, maturità aumentata, nuovo segnale o variazioni di disponibilità e affidabilità.
+- **Protezione post-hoc**: uno snapshot è accettato soltanto quando match, modello e Intelligence risultano tutti pre-partita e l'orario di cattura precede il kickoff. Nessun backfill retroattivo.
+- **Chiusura col risultato**: dopo il finale la timeline viene riconciliata con lo score ma gli snapshot non vengono ricalcolati.
+- **Archiviazione locale controllata**: massimo otto fotografie per partita e ottanta lifecycle sul dispositivo. I checkpoint automatici richiedono che la partita sia salvata nel Kickoff Watch e che il sito sia operativo nel browser.
 
 ## Match Control Room V4.5
 
@@ -134,7 +143,7 @@ Le fonti possono essere parziali o cambiare formato. Il backend normalizza i dat
 - disponibilità FPL cache 30 minuti, injury feed 20 minuti, rassegna availability 15 minuti;
 - snapshot tecnici recenti: massimo tre eventi per squadra, cache 30 minuti;
 - endpoint leggeri per partite, classifiche, notizie e stato servizio;
-- asset statici con versionamento cache `4.5.0`; cambio data automatico a mezzanotte nel fuso Europe/Rome.
+- asset statici con versionamento cache `4.6.0`; cambio data automatico a mezzanotte nel fuso Europe/Rome.
 
 ## Pubblicazione con URL stabile
 
@@ -158,7 +167,7 @@ npm test
 npm run audit
 ```
 
-I test verificano homepage e asset V4.5.0, tutte le viste frontend, le quattro aree della Match Control Room, Readiness Gate, Evidence Map, navigazione ARIA, adattamento pre/live/post, sospensione del modello durante il live, fallback trasparente, Model Track Record rigorosamente pre-kickoff, Source Health Center, Availability Intelligence, pre-season, richieste non valide, Deep Match Review, 16 classifiche, Power Model 2.1, Reliability Ledger e Team DNA. L'audit esteso contiene 112 controlli.
+I test verificano homepage e asset V4.6.0, tutte le viste frontend, Match Control Room, Readiness Gate, Evidence Map, Signal Lifecycle, checkpoint T-60/T-30/T-10, delta, riconciliazione e blocco post-hoc, navigazione ARIA, adattamento pre/live/post, sospensione del modello durante il live, fallback trasparente, Model Track Record, Source Health Center, Availability Intelligence, Deep Match Review, 16 classifiche, Reliability Ledger e Team DNA. L'audit esteso contiene 115 controlli.
 
 ## Struttura
 

@@ -25,6 +25,7 @@ const state = {
   teamDna: {},
   sourceHealth: null,
   modelSnapshots: readLocalJson('vantaggio:modelSnapshots:v1', {}),
+  signalLifecycle: readLocalJson('vantaggio:signalLifecycle:v1', {}),
   modelReconciling: false,
   lastModelReconcileAt: 0,
   fixtureLedger: readLocalJson('vantaggio:fixtureLedger', {}),
@@ -298,7 +299,7 @@ async function reconcilePendingModels() {
       const event = item.value.data.event;
       return { id: event.id, state: 'post', home: { score: event.home.score }, away: { score: event.away.score } };
     });
-    if (completed.length) { reconcileModelSnapshots(completed); if (state.currentView === 'dashboard') render(); }
+    if (completed.length) { reconcileModelSnapshots(completed); reconcileSignalLifecycles(completed); if (state.currentView === 'dashboard') render(); }
   } finally { state.modelReconciling = false; }
 }
 
@@ -315,12 +316,78 @@ function modelTrackStats() {
   };
 }
 
+function persistSignalLifecycle() {
+  const entries = Object.entries(state.signalLifecycle).sort((a, b) => new Date(b[1].updatedAt || b[1].kickoff || 0) - new Date(a[1].updatedAt || a[1].kickoff || 0)).slice(0, 80);
+  state.signalLifecycle = Object.fromEntries(entries);
+  localStorage.setItem('vantaggio:signalLifecycle:v1', JSON.stringify(state.signalLifecycle));
+}
+
+function captureSignalLifecycle(match, requestedStage = 'AUTO') {
+  if (!match) return false;
+  const key = `${match.league.id}:${match.id}`;
+  const analysis = state.analyses[key];
+  const intelligence = state.intelligence[key];
+  if (!analysis?.probabilities || !intelligence) return false;
+  const now = new Date();
+  const kickoffDates = [match.date, analysis.event?.date, intelligence.event?.date].map(value => new Date(value).getTime()).filter(Number.isFinite);
+  const kickoffMs = kickoffDates.length ? Math.min(...kickoffDates) : NaN;
+  if (match.state !== 'pre' || analysis.event?.state !== 'pre' || intelligence.event?.state !== 'pre' || !Number.isFinite(kickoffMs) || now.getTime() >= kickoffMs) return false;
+  const existing = state.signalLifecycle[match.id] || { eventId: match.id, leagueId: match.league.id, leagueLabel: match.league.label, home: match.home.name, away: match.away.name, kickoff: new Date(kickoffMs).toISOString(), snapshots: [] };
+  const readiness = readinessAssessment(intelligence);
+  const topSignal = analysis.signals?.[0] || null;
+  const signature = JSON.stringify({
+    readiness: readiness.tone, maturity: readiness.maturity,
+    probabilities: analysis.probabilities, lineup: intelligence.lineups?.official,
+    availability: intelligence.availability?.score, availabilityCount: intelligence.availability?.structuredCount,
+    reliability: intelligence.reliability?.overall, topSignal: topSignal ? [topSignal.code, topSignal.probability] : null
+  });
+  const previous = existing.snapshots[existing.snapshots.length - 1];
+  const normalizedStage = ['T-60', 'T-30', 'T-10'].includes(requestedStage) ? requestedStage : existing.snapshots.length ? 'UPDATE' : 'FIRST';
+  if (existing.snapshots.some(snapshot => snapshot.stage === normalizedStage && normalizedStage.startsWith('T-'))) return false;
+  if (previous?.signature === signature && normalizedStage === 'UPDATE') return false;
+  const snapshot = {
+    id: `${match.id}:${normalizedStage}:${now.toISOString()}`,
+    stage: normalizedStage, first: existing.snapshots.length === 0,
+    capturedAt: now.toISOString(), minutesToKickoff: Math.max(0, Math.round((kickoffMs - now.getTime()) / 60000)),
+    readiness: readiness.tone, readinessLabel: readiness.title, maturity: readiness.maturity,
+    probabilities: { home: Number(analysis.probabilities.home), draw: Number(analysis.probabilities.draw), away: Number(analysis.probabilities.away) },
+    topSignal: topSignal ? { code: topSignal.code, label: topSignal.label, probability: Number(topSignal.probability) } : null,
+    lineupsOfficial: Boolean(intelligence.lineups?.official),
+    availabilityScore: Number(intelligence.availability?.score || 0),
+    availabilityCount: Number(intelligence.availability?.structuredCount || 0),
+    reliability: Number(intelligence.reliability?.overall || 0),
+    technicalSample: Number((intelligence.tactical?.home?.observedGames || 0) + (intelligence.tactical?.away?.observedGames || 0)),
+    signature
+  };
+  existing.kickoff = new Date(kickoffMs).toISOString();
+  existing.updatedAt = now.toISOString();
+  existing.snapshots = [...existing.snapshots, snapshot].slice(-8);
+  state.signalLifecycle[match.id] = existing;
+  persistSignalLifecycle();
+  return true;
+}
+
+function reconcileSignalLifecycles(matches) {
+  let changed = false;
+  matches.filter(match => match.state === 'post').forEach(match => {
+    const lifecycle = state.signalLifecycle[match.id];
+    if (!lifecycle || lifecycle.result) return;
+    const homeScore = Number(match.home.score); const awayScore = Number(match.away.score);
+    if (!Number.isFinite(homeScore) || !Number.isFinite(awayScore)) return;
+    lifecycle.result = { homeScore, awayScore, settledAt: new Date().toISOString() };
+    lifecycle.updatedAt = lifecycle.result.settledAt;
+    changed = true;
+  });
+  if (changed) persistSignalLifecycle();
+}
+
 function applyMatches(payload) {
   const previous = Object.fromEntries(state.matches.map(match => [match.id, match.state]));
   const incoming = payload.data?.matches || [];
   trackFixtureChanges(incoming);
   state.matches = incoming;
   reconcileModelSnapshots(state.matches);
+  reconcileSignalLifecycles(state.matches);
   void reconcilePendingModels();
   state.coverage = payload.data?.coverage || { competitions: new Set(state.matches.map(match => match.league.id)).size, globalCalendar: false };
   state.dataMeta.matches = payload.meta || null;
@@ -363,6 +430,7 @@ async function runKickoffWatch() {
         state.analyses[key] = analysisPayload.data;
         archivePreKickoffModel(match, analysisPayload.data);
         state.intelligence[key] = intelPayload.data;
+        if (captureSignalLifecycle(match, `T-${threshold}`)) refreshMatchRoom(match);
         addChange('kickoff', `Kickoff Watch · ${threshold}'`, `Dossier ricontrollato: ${match.home.name}–${match.away.name}.`, match, `${threshold}:${intelPayload.data.generatedAt}`);
         if (!previousIntel?.lineups?.official && intelPayload.data.lineups?.official) addChange('lineup', 'Formazioni ufficiali pubblicate', `Gli undici di ${match.home.name}–${match.away.name} sono disponibili nel dossier.`, match, 'official');
         const previousNews = new Set((previousIntel?.news?.articles || []).map(article => article.id));
@@ -923,6 +991,12 @@ function openMatch(id) {
   loadIntelligence(match).then(() => loadAnalysis(match));
 }
 
+function refreshMatchRoom(match) {
+  const key = `${match.league.id}:${match.id}`;
+  const root = $('#matchIntelligence');
+  if (root && state.intelligence[key] && $('#matchModal')?.dataset.eventId === match.id) root.innerHTML = renderIntelligence(state.intelligence[key]);
+}
+
 function renderFallbackDeepAnalysis(match, analysis = null, error = '') {
   const homeRecent = analysis?.recent?.home;
   const awayRecent = analysis?.recent?.away;
@@ -939,6 +1013,8 @@ async function loadAnalysis(match, force = false) {
   const activeModelRoot = () => $('#roomPowerMount') || $('#advancedAnalysis');
   if (state.analyses[key] && !force) {
     archivePreKickoffModel(match, state.analyses[key]);
+    const lifecycleChanged = captureSignalLifecycle(match);
+    if (lifecycleChanged) refreshMatchRoom(match);
     const root = activeModelRoot();
     if (root) root.innerHTML = renderPowerAnalysis(state.analyses[key]);
     return;
@@ -948,6 +1024,8 @@ async function loadAnalysis(match, force = false) {
     state.analyses[key] = payload.data;
     delete state.analysisErrors[key];
     archivePreKickoffModel(match, payload.data);
+    const lifecycleChanged = captureSignalLifecycle(match);
+    if (lifecycleChanged) refreshMatchRoom(match);
     if ($('#matchModal')?.dataset.eventId === match.id && activeModelRoot()) activeModelRoot().innerHTML = renderPowerAnalysis(payload.data);
     const intelRoot = $('#matchIntelligence');
     if ($('#matchModal')?.dataset.eventId === match.id && intelRoot?.dataset.fallback === '1') intelRoot.innerHTML = renderFallbackDeepAnalysis(match, payload.data, intelRoot.dataset.error || 'Riepilogo completo non disponibile');
@@ -1024,6 +1102,7 @@ async function loadIntelligence(match, force = false) {
     const previous = state.intelligence[key];
     const payload = await api(`/api/intelligence?event=${encodeURIComponent(match.id)}&league=${encodeURIComponent(match.league.id)}${force ? '&fresh=1' : ''}`);
     state.intelligence[key] = payload.data;
+    captureSignalLifecycle(match);
     if ($('#matchIntelligence')) { delete $('#matchIntelligence').dataset.fallback; delete $('#matchIntelligence').dataset.error; }
     if (!previous?.lineups?.official && payload.data.lineups?.official) addChange('lineup', 'Formazioni ufficiali pubblicate', `Gli undici di ${match.home.name}–${match.away.name} sono disponibili nel dossier.`, match, 'official');
     if ($('#matchModal')?.dataset.eventId === match.id && $('#matchIntelligence')) $('#matchIntelligence').innerHTML = renderIntelligence(payload.data);
@@ -1106,39 +1185,64 @@ function evidenceMapMarkup(data, expanded = false) {
   return `<section class="evidence-map ${expanded ? 'expanded' : 'compact'}"><header><div><span class="section-code">EVIDENCE MAP</span><h4>Fatti, letture e vuoti senza confusione</h4></div><small>${evidence.facts.length + evidence.readings.length + evidence.unknown.length + evidence.revisions.length} elementi classificati</small></header><div>${column('Fatti verificati', 'facts', evidence.facts)}${column('Letture derivate', 'readings', evidence.readings)}${column('Da verificare', 'unknown', evidence.unknown)}${evidence.revisions.length ? column('Revisioni', 'revisions', evidence.revisions) : ''}</div></section>`;
 }
 
-function readinessGate(data) {
+function readinessAssessment(data) {
   const eventState = data.event?.state || 'pre';
-  const checkMarkup = check => `<span class="readiness-check ${check.tone}"><i></i><b>${escapeHtml(check.label)}</b><small>${escapeHtml(check.value)}</small></span>`;
   if (eventState === 'post' || data.event?.completed) {
-    return `<section class="readiness-gate closed"><header><div><span>MATCH READINESS GATE</span><h4>Decisione chiusa · review attiva</h4><p>Nessun consiglio viene mantenuto live dopo il finale. Il dossier usa risultato e dati realmente accaduti.</p></div><b>ARCHIVIO</b></header><div>${[
-      { tone: 'good', label: 'Stato', value: 'Finale' },
-      { tone: data.lineups?.official ? 'good' : 'warn', label: 'Lineup', value: data.lineups?.official ? 'Ufficiali' : 'Parziali' },
-      { tone: data.reliability?.overall >= 65 ? 'good' : 'warn', label: 'Copertura', value: `${data.reliability?.overall ?? '–'}/100` }
-    ].map(checkMarkup).join('')}</div></section>`;
+    return {
+      mode: 'post', tone: 'closed', title: 'Decisione chiusa · review attiva', badge: 'ARCHIVIO', maturity: null,
+      description: 'Nessun consiglio viene mantenuto live dopo il finale. Il dossier usa risultato e dati realmente accaduti.',
+      checks: [
+        { tone: 'good', label: 'Stato', value: 'Finale' },
+        { tone: data.lineups?.official ? 'good' : 'warn', label: 'Lineup', value: data.lineups?.official ? 'Ufficiali' : 'Parziali' },
+        { tone: data.reliability?.overall >= 65 ? 'good' : 'warn', label: 'Copertura', value: `${data.reliability?.overall ?? '–'}/100` }
+      ]
+    };
   }
   if (eventState === 'in') {
-    return `<section class="readiness-gate live"><header><div><span>MATCH READINESS GATE</span><h4>Partita in corso · modello sospeso</h4><p>Score, eventi, formazioni e statistiche effettive sostituiscono qualsiasi lettura decisionale pre-gara.</p></div><b>LIVE</b></header><div>${[
-      { tone: 'good', label: 'Feed', value: 'In diretta' },
-      { tone: data.lineups?.official ? 'good' : 'warn', label: 'Lineup', value: data.lineups?.official ? 'Ufficiali' : 'Parziali' },
-      { tone: data.reliability?.overall >= 65 ? 'good' : 'warn', label: 'Copertura', value: `${data.reliability?.overall ?? '–'}/100` }
-    ].map(checkMarkup).join('')}</div></section>`;
+    return {
+      mode: 'live', tone: 'live', title: 'Partita in corso · modello sospeso', badge: 'LIVE', maturity: null,
+      description: 'Score, eventi, formazioni e statistiche effettive sostituiscono qualsiasi lettura decisionale pre-gara.',
+      checks: [
+        { tone: 'good', label: 'Feed', value: 'In diretta' },
+        { tone: data.lineups?.official ? 'good' : 'warn', label: 'Lineup', value: data.lineups?.official ? 'Ufficiali' : 'Parziali' },
+        { tone: data.reliability?.overall >= 65 ? 'good' : 'warn', label: 'Copertura', value: `${data.reliability?.overall ?? '–'}/100` }
+      ]
+    };
   }
-  const minutes = (new Date(data.event?.date).getTime() - Date.now()) / 60000;
+  const kickoffTime = new Date(data.event?.date).getTime();
+  const minutes = Number.isFinite(kickoffTime) ? (kickoffTime - Date.now()) / 60000 : Infinity;
   const sample = (data.tactical?.home?.observedGames || 0) + (data.tactical?.away?.observedGames || 0);
-  const ageMinutes = Math.max(0, (Date.now() - new Date(data.generatedAt || data.engine?.generatedAt || Date.now()).getTime()) / 60000);
+  const generatedTime = new Date(data.generatedAt || data.engine?.generatedAt || Date.now()).getTime();
+  const ageMinutes = Number.isFinite(generatedTime) ? Math.max(0, (Date.now() - generatedTime) / 60000) : 999;
+  const availabilityScore = Number(data.availability?.score || 0);
+  const reliabilityScore = Number(data.reliability?.overall || 0);
+  const lineupScore = data.lineups?.official ? 100 : minutes <= 75 ? 20 : 55;
+  const sampleScore = Math.min(100, Math.round(sample / 6 * 100));
+  const freshnessScore = ageMinutes <= 20 ? 100 : ageMinutes <= 60 ? 55 : 20;
   const checks = [
     { label: 'Formazioni', value: data.lineups?.official ? 'Ufficiali' : minutes <= 75 ? 'Mancano vicino al via' : 'In attesa', tone: data.lineups?.official ? 'good' : minutes <= 75 ? 'bad' : 'warn' },
-    { label: 'Disponibilità', value: `${data.availability?.score ?? 0}/100`, tone: (data.availability?.score || 0) >= 65 ? 'good' : (data.availability?.score || 0) >= 45 ? 'warn' : 'bad' },
-    { label: 'Affidabilità', value: `${data.reliability?.overall ?? 0}/100`, tone: (data.reliability?.overall || 0) >= 65 ? 'good' : (data.reliability?.overall || 0) >= 45 ? 'warn' : 'bad' },
+    { label: 'Disponibilità', value: `${availabilityScore}/100`, tone: availabilityScore >= 65 ? 'good' : availabilityScore >= 45 ? 'warn' : 'bad' },
+    { label: 'Affidabilità', value: `${reliabilityScore}/100`, tone: reliabilityScore >= 65 ? 'good' : reliabilityScore >= 45 ? 'warn' : 'bad' },
     { label: 'Campione', value: `${sample} boxscore`, tone: sample >= 4 ? 'good' : sample >= 2 ? 'warn' : 'bad' },
     { label: 'Freschezza', value: ageMinutes < 2 ? 'Adesso' : `${Math.round(ageMinutes)} min`, tone: ageMinutes <= 20 ? 'good' : ageMinutes <= 60 ? 'warn' : 'bad' }
   ];
   const bad = checks.filter(check => check.tone === 'bad').length;
   const warnings = checks.filter(check => check.tone === 'warn').length;
   const tone = bad >= 2 ? 'blocked' : bad || warnings >= 2 ? 'caution' : 'ready';
-  const title = tone === 'ready' ? 'Pronta per una decisione informata' : tone === 'caution' ? 'Decisione possibile, ma con riserve' : 'Non pronta: troppe prove mancanti';
-  const badge = tone === 'ready' ? 'PRONTA' : tone === 'caution' ? 'CAUTELA' : 'ATTENDI';
-  return `<section class="readiness-gate ${tone}"><header><div><span>MATCH READINESS GATE</span><h4>${title}</h4><p>Il gate misura se le evidenze sono mature; non promette il risultato e non sostituisce il controllo delle fonti.</p></div><b>${badge}</b></header><div>${checks.map(checkMarkup).join('')}</div></section>`;
+  return {
+    mode: 'pre', tone,
+    title: tone === 'ready' ? 'Pronta per una decisione informata' : tone === 'caution' ? 'Decisione possibile, ma con riserve' : 'Non pronta: troppe prove mancanti',
+    badge: tone === 'ready' ? 'PRONTA' : tone === 'caution' ? 'CAUTELA' : 'ATTENDI',
+    description: 'Il gate misura se le evidenze sono mature; non promette il risultato e non sostituisce il controllo delle fonti.',
+    maturity: Math.round((lineupScore + availabilityScore + reliabilityScore + sampleScore + freshnessScore) / 5),
+    checks
+  };
+}
+
+function readinessGate(data) {
+  const assessment = readinessAssessment(data);
+  const checkMarkup = check => `<span class="readiness-check ${check.tone}"><i></i><b>${escapeHtml(check.label)}</b><small>${escapeHtml(check.value)}</small></span>`;
+  return `<section class="readiness-gate ${assessment.tone}"><header><div><span>MATCH READINESS GATE</span><h4>${escapeHtml(assessment.title)}</h4><p>${escapeHtml(assessment.description)}</p></div><b>${escapeHtml(assessment.badge)}</b></header><div>${assessment.checks.map(checkMarkup).join('')}</div></section>`;
 }
 
 function executiveBriefMarkup(data) {
@@ -1160,12 +1264,44 @@ function summaryWatchMarkup(data) {
   return `<section class="summary-watch"><header><span class="section-code">DECISION WATCH</span><h4>Cosa può cambiare la lettura</h4></header><div>${alerts.slice(0, 3).map(alert => `<article class="${escapeHtml(alert.level)}">${icon('info')}<div><strong>${escapeHtml(alert.title)}</strong><p>${escapeHtml(alert.text)}</p></div></article>`).join('')}${watch.slice(0, 3).map(text => `<article>${icon('radar')}<div><strong>Da monitorare</strong><p>${escapeHtml(text)}</p></div></article>`).join('')}</div></section>`;
 }
 
+function lifecycleDelta(previous, current) {
+  if (!previous) return ['Baseline registrata prima del kickoff.'];
+  const changes = [];
+  const maturityDelta = current.maturity - previous.maturity;
+  if (maturityDelta) changes.push(`Maturità ${maturityDelta > 0 ? '+' : ''}${maturityDelta}`);
+  if (!previous.lineupsOfficial && current.lineupsOfficial) changes.push('XI ufficiali pubblicati');
+  const availabilityDelta = current.availabilityScore - previous.availabilityScore;
+  if (availabilityDelta) changes.push(`Disponibilità ${availabilityDelta > 0 ? '+' : ''}${availabilityDelta}`);
+  const reliabilityDelta = current.reliability - previous.reliability;
+  if (reliabilityDelta) changes.push(`Affidabilità ${reliabilityDelta > 0 ? '+' : ''}${reliabilityDelta}`);
+  if (current.topSignal?.code !== previous.topSignal?.code) changes.push(`Segnale: ${current.topSignal?.label || 'nessuno'}`);
+  else if (current.topSignal && previous.topSignal && current.topSignal.probability !== previous.topSignal.probability) {
+    const delta = current.topSignal.probability - previous.topSignal.probability;
+    changes.push(`Segnale ${delta > 0 ? '+' : ''}${delta} pt`);
+  }
+  if (current.availabilityCount !== previous.availabilityCount) changes.push(`${current.availabilityCount} status rosa`);
+  return changes.length ? changes.slice(0, 3) : ['Nessuna variazione materiale.'];
+}
+
+function signalLifecycleMarkup(data) {
+  const lifecycle = state.signalLifecycle[String(data.event.id)];
+  const snapshots = lifecycle?.snapshots || [];
+  if (!snapshots.length) return `<section class="signal-lifecycle empty"><header><div><span class="section-code">SIGNAL LIFECYCLE</span><h4>Come cambia la lettura prima del via</h4></div><small>Archivio locale</small></header><div class="lifecycle-empty">${icon('clock')}<div><strong>Prima fotografia in preparazione</strong><p>La timeline si attiva quando modello e Intelligence sono disponibili prima del kickoff. Nessun dato viene ricostruito a posteriori.</p></div></div></section>`;
+  const stageLabel = snapshot => snapshot.first ? (snapshot.stage.startsWith('T-') ? `PRIMA · ${snapshot.stage}` : 'PRIMA LETTURA') : snapshot.stage === 'UPDATE' ? 'AGGIORNAMENTO' : snapshot.stage;
+  const cards = snapshots.map((snapshot, index) => {
+    const delta = lifecycleDelta(snapshots[index - 1], snapshot);
+    const tone = snapshot.readiness === 'ready' ? 'good' : snapshot.readiness === 'caution' ? 'warn' : 'bad';
+    return `<article class="lifecycle-card ${tone} ${index === snapshots.length - 1 ? 'latest' : ''}"><header><i></i><span>${escapeHtml(stageLabel(snapshot))}</span><small>T-${snapshot.minutesToKickoff}' · ${escapeHtml(fmtTime.format(new Date(snapshot.capturedAt)))}</small></header><div class="lifecycle-score"><strong>${snapshot.maturity}<small>/100</small></strong><span>${escapeHtml(snapshot.readinessLabel)}</span></div><div class="lifecycle-model"><span>1 ${snapshot.probabilities.home}%</span><span>X ${snapshot.probabilities.draw}%</span><span>2 ${snapshot.probabilities.away}%</span></div><ul>${delta.map(text => `<li>${escapeHtml(text)}</li>`).join('')}</ul></article>`;
+  }).join('');
+  return `<section class="signal-lifecycle"><header><div><span class="section-code">SIGNAL LIFECYCLE</span><h4>Dal primo segnale al kickoff</h4></div><small>${snapshots.length} ${snapshots.length === 1 ? 'fotografia' : 'fotografie'} · solo pre-partita</small></header><div class="lifecycle-track">${cards}</div>${lifecycle.result ? `<footer>${icon('shield')}<span>Timeline chiusa: risultato finale ${lifecycle.home} ${lifecycle.result.homeScore}–${lifecycle.result.awayScore} ${lifecycle.away}. Gli snapshot non sono stati ricalcolati.</span></footer>` : `<footer>${icon('info')}<span>Snapshot locali e immutabili: prima lettura, aggiornamenti materiali e controlli Kickoff Watch T-60/T-30/T-10.</span></footer>`}</section>`;
+}
+
 function matchRoomSummary(data) {
   const context = data.context || {};
   const aggregate = context.aggregate;
   const stake = aggregate ? `${aggregate.home}-${aggregate.away} aggregato · ${context.scenario}` : context.phase || context.scenario || 'Partita singola';
   const sample = (data.tactical?.home?.observedGames || 0) + (data.tactical?.away?.observedGames || 0);
-  return `<div class="match-room-pane summary-pane">${readinessGate(data)}${executiveBriefMarkup(data)}<section class="room-context-strip"><article><span>CONTESTO</span><strong>${escapeHtml(stake)}</strong><small>${escapeHtml(context.venue?.name || 'Sede non disponibile')}</small></article><article><span>FORMAZIONI</span><strong>${data.lineups?.official ? 'Ufficiali' : 'In attesa'}</strong><small>${data.lineups?.official ? 'Entrambi gli XI presenti' : 'Nessuna formazione ipotizzata'}</small></article><article><span>CAMPIONE</span><strong>${sample} boxscore</strong><small>Copertura dichiarata</small></article></section>${evidenceMapMarkup(data)}${summaryWatchMarkup(data)}</div>`;
+  return `<div class="match-room-pane summary-pane">${readinessGate(data)}${signalLifecycleMarkup(data)}${executiveBriefMarkup(data)}<section class="room-context-strip"><article><span>CONTESTO</span><strong>${escapeHtml(stake)}</strong><small>${escapeHtml(context.venue?.name || 'Sede non disponibile')}</small></article><article><span>FORMAZIONI</span><strong>${data.lineups?.official ? 'Ufficiali' : 'In attesa'}</strong><small>${data.lineups?.official ? 'Entrambi gli XI presenti' : 'Nessuna formazione ipotizzata'}</small></article><article><span>CAMPIONE</span><strong>${sample} boxscore</strong><small>Copertura dichiarata</small></article></section>${evidenceMapMarkup(data)}${summaryWatchMarkup(data)}</div>`;
 }
 
 function matchRoomTeams(data) {
@@ -1222,7 +1358,7 @@ function openInfo() {
   const modal = $('#matchModal');
   delete modal.dataset.eventId;
   modal.style.removeProperty('--league-color');
-  modal.innerHTML = `<button class="modal-close" data-close-modal aria-label="Chiudi">${icon('x')}</button><header class="modal-hero"><span class="modal-competition"><i></i>TRASPARENZA</span><div style="position:relative;z-index:1;margin-top:24px"><h2 style="margin:0 0 8px;font-size:26px">Dati gratuiti, metodo chiaro.</h2><p style="margin:0;color:rgba(255,255,255,.65);font-size:11px;line-height:1.5">Nessun abbonamento e nessuna chiave API a pagamento.</p></div></header><div class="modal-body"><section class="analysis-box"><div class="analysis-box-head"><span>Fonti attive</span><strong>Feed pubblici</strong></div><p>Partite, contesto, statistiche, calendari, classifiche, lineup e injury route: feed pubblici ESPN. Fantasy Premier League ufficiale aggiunge status e aggiornamenti per la sola Premier League. Google News fornisce titoli datati e link; ANSA, Football Italia ed ESPN alimentano la Newsroom.</p></section><section class="form-comparison"><h3>Come si aggiorna</h3><p style="color:var(--muted);font-size:10px;line-height:1.6">Le partite vengono ricontrollate ogni 90 secondi mentre il sito è aperto; le notizie ogni pochi minuti. A mezzanotte il calendario avanza automaticamente sul nuovo giorno nel fuso Europe/Rome. In caso di errore temporaneo, viene mantenuta l’ultima risposta valida in cache.</p><h3 style="margin-top:18px">Power Model 2.1 + Match Intelligence</h3><p style="color:var(--muted);font-size:10px;line-height:1.6">Il Power Model combina distribuzione di Poisson, forma, precedenti, fattore campo e consenso di mercato senza margine quando presente. Match Intelligence aggiunge fase e aggregato, riposo, carico gare, campioni tecnici recenti, giocatori chiave, formazioni ufficiali e news pertinenti. Ogni elemento è marcato come fatto, lettura derivata o dato da verificare. Nessun esito è garantito.</p><h3 style="margin-top:18px">Match Control Room V4.5</h3><p style="color:var(--muted);font-size:10px;line-height:1.6">Ogni partita usa quattro aree: Sintesi, Squadre, Numeri e Verifiche. Readiness Gate controlla maturità delle prove; Evidence Map separa fatti, letture e dati mancanti; il dossier cambia fra pre, live e post. Track Record, Source Health e Availability Intelligence restano integri, ma non sono più dispersi in blocchi concorrenti.</p></section><div class="modal-note">${icon('shield')}<span>Preferiti, tema e alert sono salvati localmente nel browser. Il sito non richiede account e non invia dati personali.</span></div><div class="modal-actions"><button class="button primary" data-close-modal>Ho capito</button></div></div>`;
+  modal.innerHTML = `<button class="modal-close" data-close-modal aria-label="Chiudi">${icon('x')}</button><header class="modal-hero"><span class="modal-competition"><i></i>TRASPARENZA</span><div style="position:relative;z-index:1;margin-top:24px"><h2 style="margin:0 0 8px;font-size:26px">Dati gratuiti, metodo chiaro.</h2><p style="margin:0;color:rgba(255,255,255,.65);font-size:11px;line-height:1.5">Nessun abbonamento e nessuna chiave API a pagamento.</p></div></header><div class="modal-body"><section class="analysis-box"><div class="analysis-box-head"><span>Fonti attive</span><strong>Feed pubblici</strong></div><p>Partite, contesto, statistiche, calendari, classifiche, lineup e injury route: feed pubblici ESPN. Fantasy Premier League ufficiale aggiunge status e aggiornamenti per la sola Premier League. Google News fornisce titoli datati e link; ANSA, Football Italia ed ESPN alimentano la Newsroom.</p></section><section class="form-comparison"><h3>Come si aggiorna</h3><p style="color:var(--muted);font-size:10px;line-height:1.6">Le partite vengono ricontrollate ogni 90 secondi mentre il sito è aperto; le notizie ogni pochi minuti. A mezzanotte il calendario avanza automaticamente sul nuovo giorno nel fuso Europe/Rome. In caso di errore temporaneo, viene mantenuta l’ultima risposta valida in cache.</p><h3 style="margin-top:18px">Power Model 2.1 + Match Intelligence</h3><p style="color:var(--muted);font-size:10px;line-height:1.6">Il Power Model combina distribuzione di Poisson, forma, precedenti, fattore campo e consenso di mercato senza margine quando presente. Match Intelligence aggiunge fase e aggregato, riposo, carico gare, campioni tecnici recenti, giocatori chiave, formazioni ufficiali e news pertinenti. Ogni elemento è marcato come fatto, lettura derivata o dato da verificare. Nessun esito è garantito.</p><h3 style="margin-top:18px">Signal Lifecycle V4.6</h3><p style="color:var(--muted);font-size:10px;line-height:1.6">Dentro la Sintesi, Signal Lifecycle conserva soltanto fotografie realmente pre-kickoff: prima lettura, aggiornamenti materiali e controlli T-60, T-30 e T-10 del Kickoff Watch. Mostra variazioni di readiness, probabilità, lineup, disponibilità e affidabilità; dopo il finale aggiunge il risultato senza ricalcolare il passato.</p></section><div class="modal-note">${icon('shield')}<span>Preferiti, tema e alert sono salvati localmente nel browser. Il sito non richiede account e non invia dati personali.</span></div><div class="modal-actions"><button class="button primary" data-close-modal>Ho capito</button></div></div>`;
   $('#modalLayer').hidden = false;
   document.body.style.overflow = 'hidden';
 }
