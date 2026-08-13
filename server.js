@@ -63,6 +63,12 @@ function romeDate(date = new Date()) {
   return `${parts.year}-${parts.month}-${parts.day}`;
 }
 
+function isIsoDate(value = '') {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const date = new Date(`${value}T12:00:00Z`);
+  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
+}
+
 function addDays(isoDate, count) {
   const date = new Date(`${isoDate}T12:00:00Z`);
   date.setUTCDate(date.getUTCDate() + count);
@@ -258,7 +264,8 @@ function getStat(entry, names, fallback = 0) {
 }
 
 async function getStandings(leagueId = 'ita.1', force = false) {
-  const league = LEAGUES[leagueId] || LEAGUES['ita.1'];
+  const league = LEAGUES[leagueId];
+  if (!league) throw new Error('Competizione non valida');
   return cached(`table:${league.id}`, 10 * 60_000, async () => {
     const url = `https://site.api.espn.com/apis/v2/sports/soccer/${encodeURIComponent(league.id)}/standings`;
     const json = await fetchJson(url);
@@ -1444,7 +1451,7 @@ function contentType(filePath) {
   })[ext] || 'application/octet-stream';
 }
 
-function serveStatic(reqPath, res) {
+function serveStatic(reqPath, res, versioned = false) {
   const pathname = reqPath === '/' ? '/index.html' : reqPath;
   const safePath = path.normalize(pathname).replace(/^(\.\.[/\\])+/, '');
   let filePath = path.join(PUBLIC_DIR, safePath);
@@ -1454,16 +1461,18 @@ function serveStatic(reqPath, res) {
       filePath = path.join(PUBLIC_DIR, 'index.html');
       return fs.readFile(filePath, (readError, data) => {
         if (readError) return jsonResponse(res, 404, { error: 'Pagina non trovata' });
-        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-cache' });
+        res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-cache', 'x-content-type-options': 'nosniff', 'referrer-policy': 'strict-origin-when-cross-origin' });
         res.end(data);
       });
     }
     fs.readFile(filePath, (readError, data) => {
       if (readError) return jsonResponse(res, 500, { error: 'Errore lettura file' });
+      const immutable = versioned && ['.css', '.js'].includes(path.extname(filePath).toLowerCase());
       res.writeHead(200, {
         'content-type': contentType(filePath),
-        'cache-control': 'public, max-age=0, must-revalidate',
-        'x-content-type-options': 'nosniff'
+        'cache-control': immutable ? 'public, max-age=31536000, immutable' : 'public, max-age=0, must-revalidate',
+        'x-content-type-options': 'nosniff',
+        'referrer-policy': 'strict-origin-when-cross-origin'
       });
       res.end(data);
     });
@@ -1486,9 +1495,14 @@ const server = http.createServer(async (req, res) => {
         });
       }
       if (pathname === '/api/matches') {
-        const from = /^\d{4}-\d{2}-\d{2}$/.test(requestUrl.searchParams.get('from') || '') ? requestUrl.searchParams.get('from') : romeDate();
-        const to = /^\d{4}-\d{2}-\d{2}$/.test(requestUrl.searchParams.get('to') || '') ? requestUrl.searchParams.get('to') : addDays(from, 10);
+        const rawFrom = requestUrl.searchParams.get('from') || '';
+        const rawTo = requestUrl.searchParams.get('to') || '';
+        if ((rawFrom && !isIsoDate(rawFrom)) || (rawTo && !isIsoDate(rawTo))) return jsonResponse(res, 400, { ok: false, error: 'Data non valida: usa YYYY-MM-DD' });
+        const from = rawFrom || romeDate();
+        const to = rawTo || addDays(from, 10);
+        if (from > to) return jsonResponse(res, 400, { ok: false, error: 'Intervallo non valido: la data iniziale supera quella finale' });
         const leagueId = requestUrl.searchParams.get('league') || 'all';
+        if (leagueId !== 'all' && !LEAGUES[leagueId]) return jsonResponse(res, 400, { ok: false, error: 'Competizione non valida' });
         const force = requestUrl.searchParams.get('fresh') === '1';
         const result = await getMatches({ leagueId, from, to, force });
         return jsonResponse(res, 200, {
@@ -1499,6 +1513,7 @@ const server = http.createServer(async (req, res) => {
       }
       if (pathname === '/api/standings') {
         const leagueId = requestUrl.searchParams.get('league') || 'ita.1';
+        if (!LEAGUES[leagueId]) return jsonResponse(res, 400, { ok: false, error: 'Competizione non valida' });
         const force = requestUrl.searchParams.get('fresh') === '1';
         const result = await getStandings(leagueId, force);
         return jsonResponse(res, 200, { ok: true, data: result.value, meta: { fetchedAt: result.fetchedAt, stale: result.stale } });
@@ -1536,7 +1551,11 @@ const server = http.createServer(async (req, res) => {
       return jsonResponse(res, 502, { ok: false, error: error.message || 'Errore sorgente dati', time: nowIso() });
     }
   }
-  serveStatic(decodeURIComponent(pathname), res);
+  try {
+    serveStatic(decodeURIComponent(pathname), res, requestUrl.searchParams.has('v'));
+  } catch {
+    jsonResponse(res, 400, { ok: false, error: 'Percorso non valido' });
+  }
 });
 
 server.listen(PORT, HOST, () => {

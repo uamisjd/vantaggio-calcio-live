@@ -10,8 +10,8 @@ async function get(path, type = 'json') {
 
 (async () => {
   const html = await get('/', 'text');
-  if (!html.includes('VANTAGGIO') || !html.includes('V4.3') || !html.includes('/app.js?v=4.3.0') || !html.includes('/styles.css?v=4.3.0')) throw new Error('Homepage o asset V4.3 non validi');
-  const [appJs, styles] = await Promise.all([get('/app.js?v=4.3.0', 'text'), get('/styles.css?v=4.3.0', 'text')]);
+  if (!html.includes('VANTAGGIO') || !html.includes('V4.3') || !html.includes('/app.js?v=4.3.1') || !html.includes('/styles.css?v=4.3.1')) throw new Error('Homepage o asset V4.3.1 non validi');
+  const [appJs, styles] = await Promise.all([get('/app.js?v=4.3.1', 'text'), get('/styles.css?v=4.3.1', 'text')]);
   const v4Modules = ['DAILY BRIEFING', 'MATCHDAY COMMAND', 'SIGNAL STUDIO', 'VANTAGGIO NEWSROOM', 'TABLE LAB', 'MY MATCHROOM', 'SCOUT SEARCH', 'WHAT CHANGED DESK', 'KICKOFF WATCH', 'TEAM DNA', 'RELIABILITY LEDGER', 'MATCH ARCHIVE'];
   const dossierFirst = ['Analisi approfondita', 'renderFallbackDeepAnalysis', 'model-drawer', 'evidence-summary', 'COPERTURA RIDOTTA'];
   if (!v4Modules.every(module => appJs.includes(module)) || !dossierFirst.every(module => appJs.includes(module)) || !styles.includes('VANTAGGIO 4.0') || !styles.includes('.deep-dive.fallback')) throw new Error('Moduli esperienza V4.3 incompleti');
@@ -65,7 +65,7 @@ async function get(path, type = 'json') {
   if (review.data.deepDive?.mode !== 'post' || review.data.event.home.score !== 2 || review.data.event.away.score !== 1 || !review.data.deepDive.paragraphs?.length) throw new Error('Deep Match Review non valida');
   if (!review.data.deepDive.paragraphs.some(item => item.title === 'Season Vault') || !review.data.deepDive.teamCases.every(item => item.season?.played > 0) || !review.data.deepDive.unavailable.some(item => item.includes('xG'))) throw new Error('Season Vault o trasparenza dati incompleti');
 
-  console.log(`✓ Homepage V4.3 e asset cache serviti`);
+  console.log(`✓ Homepage V4.3.1 e asset cache serviti`);
   console.log(`✓ Dossier-first, fallback trasparente e componenti ridondanti rimossi`);
   console.log(`✓ ${matches.data.matches.length} partite in ${matches.data.coverage?.competitions || 0} competizioni`);
   console.log(`✓ Power Model 2.1 operativo su ${analyzable.home.name}–${analyzable.away.name}`);

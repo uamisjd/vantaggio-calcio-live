@@ -57,9 +57,11 @@ function escapeHtml(value = '') {
 }
 
 function safeUrl(value = '') {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
   try {
-    const url = new URL(value, location.origin);
-    return ['http:', 'https:'].includes(url.protocol) ? escapeHtml(url.href) : '';
+    const url = new URL(raw, location.origin);
+    return ['http:', 'https:'].includes(url.protocol) ? url.href : '';
   } catch { return ''; }
 }
 
@@ -93,17 +95,11 @@ function displayNewsDate(value) {
   return Number.isNaN(date.getTime()) ? 'Data non disponibile' : fmtNewsDate.format(date);
 }
 
-function formScore(form = '') {
-  const values = String(form).toUpperCase().replace(/[^VPSWDL]/g, '').replaceAll('W', 'V').replaceAll('D', 'P').replaceAll('L', 'S').slice(-5).split('');
-  if (!values.length) return 50;
-  return Math.round(values.reduce((sum, item) => sum + (item === 'V' ? 100 : item === 'P' ? 48 : 0), 0) / values.length);
-}
-
 function teamLogo(team, className = 'team-logo') {
   const initials = escapeHtml((team.abbreviation || team.name || 'FC').slice(0, 3).toUpperCase());
   const src = safeUrl(team.logo);
   if (!src) return `<span class="logo-fallback ${className === 'team-logo' ? '' : className}">${initials}</span>`;
-  return `<img class="${className}" src="${src}" alt="${escapeHtml(team.name)}" loading="lazy" referrerpolicy="no-referrer" onerror="this.style.display='none';this.nextElementSibling.style.display='grid'"><span class="logo-fallback" style="display:none">${initials}</span>`;
+  return `<img class="${className}" src="${escapeHtml(src)}" alt="${escapeHtml(team.name)}" loading="lazy" referrerpolicy="no-referrer" onerror="this.style.display='none';this.nextElementSibling.style.display='grid'"><span class="logo-fallback" style="display:none">${initials}</span>`;
 }
 
 function formMarkup(form = '') {
@@ -356,6 +352,8 @@ async function refreshAll(manual = false) {
 async function loadStandings(leagueId, force = false) {
   state.standingsLeague = leagueId;
   if (state.tables[leagueId] && !force) return;
+  delete state.errors.standings;
+  if (state.currentView === 'standings') render();
   try {
     const payload = await api(`/api/standings?league=${encodeURIComponent(leagueId)}${force ? '&fresh=1' : ''}`);
     state.tables[leagueId] = payload.data;
@@ -570,7 +568,8 @@ function matchRow(match) {
   const status = statusMarkup(match);
   const favorite = state.favorites.has(match.id);
   const dossier = state.intelligence[`${match.league.id}:${match.id}`];
-  return `<article class="match-row" data-match="${escapeHtml(match.id)}" role="button" tabindex="0" aria-label="Apri l’analisi di ${escapeHtml(match.home.name)} contro ${escapeHtml(match.away.name)}">
+  return `<article class="match-row">
+    <button class="match-open-button" data-match="${escapeHtml(match.id)}" aria-label="Apri l’analisi di ${escapeHtml(match.home.name)} contro ${escapeHtml(match.away.name)}"></button>
     <div class="match-meta"><span class="match-league"><i style="--league:${escapeHtml(match.league.accent)}"></i>${escapeHtml(match.league.label)}<b class="power-mini">DEEP</b></span><span class="match-date">${escapeHtml(displayDate(match.date))}</span></div>
     <div class="match-team home">${teamLogo(match.home)}<div><strong>${escapeHtml(match.home.name)}</strong>${formMarkup(match.home.form)}</div></div>
     <div class="match-center ${status.className}"><span class="match-time ${match.state === 'in' ? 'live-pill' : ''}">${escapeHtml(status.main)}</span><span class="match-status">${escapeHtml(status.sub)}</span></div>
@@ -588,8 +587,8 @@ function radarItem(match, index) {
 
 function newsCard(article) {
   const image = safeUrl(article.image);
-  const style = image ? ` style="background-image:url('${image.replaceAll("'", '%27')}')"` : '';
-  return `<article class="news-card ${image ? 'has-image' : ''}" data-news-url="${safeUrl(article.link)}"${style} tabindex="0">
+  const style = image ? ` style="background-image:url('${escapeHtml(image.replaceAll("'", '%27'))}')"` : '';
+  return `<article class="news-card ${image ? 'has-image' : ''}" data-news-url="${escapeHtml(safeUrl(article.link))}"${style} tabindex="0">
     <span class="news-source"><i></i>${escapeHtml(article.source)}</span>
     <h3>${escapeHtml(article.title)}</h3>
     ${article.description ? `<p>${escapeHtml(article.description)}</p>` : ''}
@@ -663,7 +662,7 @@ function newsTopic(article) {
 }
 
 function newsroomSideStory(article, index) {
-  return `<article class="newsroom-side-story" data-news-url="${safeUrl(article.link)}" tabindex="0"><span>${String(index + 2).padStart(2, '0')} · ${escapeHtml(newsTopic(article))}</span><h3>${escapeHtml(article.title)}</h3><footer><b>${escapeHtml(article.source)}</b><small>${article.published ? escapeHtml(displayNewsDate(article.published)) : 'Ora'}</small>${icon('arrow')}</footer></article>`;
+  return `<article class="newsroom-side-story" data-news-url="${escapeHtml(safeUrl(article.link))}" tabindex="0"><span>${String(index + 2).padStart(2, '0')} · ${escapeHtml(newsTopic(article))}</span><h3>${escapeHtml(article.title)}</h3><footer><b>${escapeHtml(article.source)}</b><small>${article.published ? escapeHtml(displayNewsDate(article.published)) : 'Ora'}</small>${icon('arrow')}</footer></article>`;
 }
 
 function renderNewsView() {
@@ -677,7 +676,7 @@ function renderNewsView() {
     ${viewHeader('VANTAGGIO NEWSROOM', 'Notizie', 'Una prima pagina viva: gerarchia editoriale, temi riconoscibili, data e fonte sempre in evidenza.', `<button class="button" id="viewRefresh">${icon('refresh')} Aggiorna redazione</button>`)}
     <section class="newsroom-status"><div><span class="broadcast-label"><i></i>NEWS DESK LIVE</span><strong>${articles.length} articoli disponibili</strong></div><div class="source-ticker">${sourceCounts.map(item => `<span><b>${item.count}</b>${escapeHtml(item.source)}</span>`).join('')}</div><small>${updated ? `Ultimo desk ${escapeHtml(relativeTime(updated))}` : 'Sincronizzazione in corso'}</small></section>
     <section class="news-toolbar editorial-toolbar"><div class="filter-row"><button class="filter-chip ${state.newsSource === 'all' ? 'active' : ''}" data-news-source="all">Prima pagina</button>${sources.map(source => `<button class="filter-chip ${state.newsSource === source ? 'active' : ''}" data-news-source="${escapeHtml(source)}">${escapeHtml(source)}</button>`).join('')}</div></section>
-    ${state.errors.news && !state.news.length ? errorBlock(state.errors.news) : (articles.length ? `<section class="front-page"><article class="lead-story ${leadImage ? 'has-image' : ''}" data-news-url="${safeUrl(lead.link)}" tabindex="0"${leadImage ? ` style="--lead-image:url('${leadImage.replaceAll("'", '%27')}')"` : ''}><div class="lead-story-shade"></div><div class="lead-story-content"><span>${escapeHtml(newsTopic(lead))} · APERTURA</span><h2>${escapeHtml(lead.title)}</h2>${lead.description ? `<p>${escapeHtml(lead.description)}</p>` : ''}<footer><b>${escapeHtml(lead.source)}</b><small>${lead.published ? escapeHtml(displayNewsDate(lead.published)) : 'Ultimo aggiornamento'}</small><i>Leggi alla fonte ${icon('external')}</i></footer></div></article><div class="front-page-side">${articles.slice(1, 4).map(newsroomSideStory).join('') || '<div class="intel-empty">Altri titoli in arrivo.</div>'}</div></section><section class="news-archive"><header class="plain-section-head"><div><span class="section-code">ULTIME EDIZIONI</span><h2>Il resto del flusso</h2><p>Ogni scheda apre direttamente la fonte originale</p></div></header><div class="news-grid">${articles.slice(4).map(newsCard).join('') || articles.slice(1).map(newsCard).join('')}</div></section>` : emptyState('news', 'Nessuna notizia', 'Non ci sono articoli per questa fonte. Seleziona “Prima pagina”.'))}
+    ${state.errors.news && !state.news.length ? errorBlock(state.errors.news) : (articles.length ? `<section class="front-page"><article class="lead-story ${leadImage ? 'has-image' : ''}" data-news-url="${escapeHtml(safeUrl(lead.link))}" tabindex="0"${leadImage ? ` style="--lead-image:url('${escapeHtml(leadImage.replaceAll("'", '%27'))}')"` : ''}><div class="lead-story-shade"></div><div class="lead-story-content"><span>${escapeHtml(newsTopic(lead))} · APERTURA</span><h2>${escapeHtml(lead.title)}</h2>${lead.description ? `<p>${escapeHtml(lead.description)}</p>` : ''}<footer><b>${escapeHtml(lead.source)}</b><small>${lead.published ? escapeHtml(displayNewsDate(lead.published)) : 'Ultimo aggiornamento'}</small><i>Leggi alla fonte ${icon('external')}</i></footer></div></article><div class="front-page-side">${articles.slice(1, 4).map(newsroomSideStory).join('') || '<div class="intel-empty">Altri titoli in arrivo.</div>'}</div></section><section class="news-archive"><header class="plain-section-head"><div><span class="section-code">ULTIME EDIZIONI</span><h2>Il resto del flusso</h2><p>Ogni scheda apre direttamente la fonte originale</p></div></header><div class="news-grid">${articles.slice(4).map(newsCard).join('') || articles.slice(1).map(newsCard).join('')}</div></section>` : emptyState('news', 'Nessuna notizia', 'Non ci sono articoli per questa fonte. Seleziona “Prima pagina”.'))}
   </div>`;
 }
 
@@ -691,18 +690,25 @@ function renderStandingsView() {
   else if (!data.table?.length) content = emptyState('table', 'Classifica non ancora disponibile', 'La nuova stagione potrebbe non essere iniziata. La tabella apparirà appena pubblicata dalla fonte.');
   else {
     const table = data.table;
+    const started = table.some(row => row.played > 0);
+    const activeRows = table.filter(row => row.played > 0);
     const leader = table[0];
     const second = table[1];
-    const bestAttack = [...table].sort((a, b) => b.goalsFor - a.goalsFor)[0];
-    const bestDefense = [...table].filter(row => row.played > 0).sort((a, b) => a.goalsAgainst - b.goalsAgainst)[0] || table[0];
-    const titleGap = second ? leader.points - second.points : 0;
-    const games = table.reduce((sum, row) => sum + row.played, 0) / 2;
-    const goals = table.reduce((sum, row) => sum + row.goalsFor, 0);
+    const bestAttack = [...activeRows].sort((a, b) => b.goalsFor - a.goalsFor)[0];
+    const bestDefense = [...activeRows].sort((a, b) => a.goalsAgainst - b.goalsAgainst)[0];
+    const titleGap = started && second ? leader.points - second.points : 0;
+    const games = activeRows.reduce((sum, row) => sum + row.played, 0) / 2;
+    const goals = activeRows.reduce((sum, row) => sum + row.goalsFor, 0);
     const goalsPerGame = games ? Math.round((goals / games) * 10) / 10 : 0;
     const sixth = table[Math.min(5, table.length - 1)];
-    const spread = sixth ? leader.points - sixth.points : 0;
-    const started = leader.played > 0;
-    content = `<section class="league-pulse"><header><div><span class="broadcast-label"><i></i>LEAGUE PULSE</span><h2>${escapeHtml(data.league.label)}</h2><p>${escapeHtml(data.season || 'Stagione corrente')}</p></div><strong>${started ? `${leader.played} giornate lette` : 'Pre-season'}</strong></header><div class="league-pulse-grid"><article class="leader-pulse">${teamLogo({ ...leader.team, abbreviation: leader.team.name.slice(0, 3) }, 'pulse-logo')}<div><span>CAPOLISTA</span><strong>${escapeHtml(leader.team.name)}</strong><small>${leader.points} punti · ${titleGap ? `+${titleGap} sulla seconda` : 'classifica serrata'}</small></div></article><article><span>MIGLIOR ATTACCO</span><strong>${escapeHtml(bestAttack.team.name)}</strong><small>${bestAttack.goalsFor} gol segnati</small></article><article><span>MIGLIOR DIFESA</span><strong>${escapeHtml(bestDefense.team.name)}</strong><small>${bestDefense.goalsAgainst} gol subiti</small></article><article><span>RITMO DEL TORNEO</span><strong>${goalsPerGame}</strong><small>gol per partita disputata</small></article></div></section><div class="standings-layout intelligence-table-layout"><section class="standings-card"><header class="table-broadcast-head"><span>CLASSIFICA LIVE</span><small>PG partite · DR differenza reti · PPG punti per gara</small></header><div class="table-scroll"><table class="standings-table"><thead><tr><th>#</th><th>Squadra</th><th>PG</th><th>V</th><th>P</th><th>S</th><th>GF</th><th>GS</th><th>DR</th><th>PPG</th><th>PT</th></tr></thead><tbody>${table.map((row, index) => `<tr class="${index < 4 ? 'zone-ucl' : index >= table.length - 3 ? 'zone-drop' : ''}"><td><span class="rank-cell">${row.rank}</span></td><td class="standings-team">${teamLogo({ ...row.team, abbreviation: row.team.name.slice(0, 3) })}<strong>${escapeHtml(row.team.name)}</strong><button class="table-dna" data-team-dna="${escapeHtml(row.team.id)}" data-team-name="${escapeHtml(row.team.name)}" data-team-logo="${safeUrl(row.team.logo)}" data-team-league="${escapeHtml(state.standingsLeague)}">DNA</button></td><td>${row.played}</td><td>${row.wins}</td><td>${row.draws}</td><td>${row.losses}</td><td>${row.goalsFor}</td><td>${row.goalsAgainst}</td><td>${row.difference > 0 ? '+' : ''}${row.difference}</td><td>${row.played ? (row.points / row.played).toFixed(2) : '–'}</td><td class="points">${row.points}</td></tr>`).join('')}</tbody></table></div></section><aside class="league-intelligence"><span class="section-code">TABLE INTELLIGENCE</span><h3>Come leggere la corsa</h3><div class="league-reading"><span>Distacco 1ª–6ª</span><strong>${spread} pt</strong><p>${spread <= 5 ? 'La parte alta è ancora molto compatta.' : 'La vetta sta creando una separazione visibile.'}</p></div><div class="league-reading"><span>Zona alta</span><strong>${table.slice(0, 4).map(row => row.team.name).join(' · ')}</strong></div><div class="zone-legend"><p><i></i>Fascia europea indicativa</p><p><i class="red"></i>Fascia retrocessione indicativa</p></div><div class="legend-note">Le fasce sono un aiuto visivo: criteri ufficiali, playoff e posti europei dipendono dalla competizione.</div></aside></div>`;
+    const spread = started && sixth ? leader.points - sixth.points : 0;
+    const pulse = started ? `<div class="league-pulse-grid"><article class="leader-pulse">${teamLogo({ ...leader.team, abbreviation: leader.team.name.slice(0, 3) }, 'pulse-logo')}<div><span>CAPOLISTA</span><strong>${escapeHtml(leader.team.name)}</strong><small>${leader.points} punti · ${titleGap ? `+${titleGap} sulla seconda` : 'classifica serrata'}</small></div></article><article><span>MIGLIOR ATTACCO</span><strong>${escapeHtml(bestAttack?.team.name || 'Dati in attesa')}</strong><small>${bestAttack ? `${bestAttack.goalsFor} gol segnati` : 'Campione non disponibile'}</small></article><article><span>MIGLIOR DIFESA</span><strong>${escapeHtml(bestDefense?.team.name || 'Dati in attesa')}</strong><small>${bestDefense ? `${bestDefense.goalsAgainst} gol subiti` : 'Campione non disponibile'}</small></article><article><span>RITMO DEL TORNEO</span><strong>${goalsPerGame}</strong><small>gol per partita disputata</small></article></div>` : `<div class="league-pulse-grid preseason-grid"><article class="leader-pulse preseason-pulse"><span class="pulse-status-icon">${icon('clock')}</span><div><span>STATO TORNEO</span><strong>Pre-season</strong><small>Nessuna partita di campionato registrata</small></div></article><article><span>SQUADRE PUBBLICATE</span><strong>${table.length}</strong><small>elenco ufficiale del feed</small></article><article><span>GERARCHIE</span><strong>Non disponibili</strong><small>zero risultati: nessuna capolista reale</small></article><article><span>PROSSIMO PASSO</span><strong>Prima giornata</strong><small>i dati si attiveranno automaticamente</small></article></div>`;
+    const tableRows = table.map((row, index) => {
+      const zoneClass = !started ? '' : index < 4 ? 'zone-ucl' : index >= table.length - 3 ? 'zone-drop' : '';
+      return `<tr class="${zoneClass}"><td><span class="rank-cell">${row.rank}</span></td><td class="standings-team">${teamLogo({ ...row.team, abbreviation: row.team.name.slice(0, 3) })}<strong>${escapeHtml(row.team.name)}</strong><button class="table-dna" data-team-dna="${escapeHtml(row.team.id)}" data-team-name="${escapeHtml(row.team.name)}" data-team-logo="${escapeHtml(safeUrl(row.team.logo))}" data-team-league="${escapeHtml(state.standingsLeague)}">DNA</button></td><td>${row.played}</td><td>${row.wins}</td><td>${row.draws}</td><td>${row.losses}</td><td>${row.goalsFor}</td><td>${row.goalsAgainst}</td><td>${row.difference > 0 ? '+' : ''}${row.difference}</td><td>${row.played ? (row.points / row.played).toFixed(2) : '–'}</td><td class="points">${row.points}</td></tr>`;
+    }).join('');
+    const tableReading = started ? `<div class="league-reading"><span>DISTACCO 1ª–6ª</span><strong>${spread} pt</strong><p>${spread <= 5 ? 'La parte alta è ancora molto compatta.' : 'La vetta sta creando una separazione visibile.'}</p></div><div class="league-reading"><span>ZONA ALTA</span><strong>${table.slice(0, 4).map(row => escapeHtml(row.team.name)).join(' · ')}</strong></div><div class="zone-legend"><p><i></i>Fascia europea indicativa</p><p><i class="red"></i>Fascia retrocessione indicativa</p></div><div class="legend-note">Le fasce sono un aiuto visivo: criteri ufficiali, playoff e posti europei dipendono dalla competizione.</div>` : `<div class="league-reading preseason-reading"><span>STAGIONE NON INIZIATA</span><strong>Nessuna gerarchia sportiva ancora disponibile</strong><p>Le posizioni del feed sono soltanto un ordinamento tecnico. Vetta, distacchi, miglior attacco, miglior difesa e zone europee appariranno dopo le prime partite.</p></div><div class="legend-note">VANTAGGIO non presenta l’ordine pre-season come una classifica reale.</div>`;
+    content = `<section class="league-pulse"><header><div><span class="broadcast-label"><i></i>LEAGUE PULSE</span><h2>${escapeHtml(data.league.label)}</h2><p>${escapeHtml(data.season || 'Stagione corrente')}</p></div><strong>${started ? `${leader.played} giornate lette` : 'Pre-season · dati non competitivi'}</strong></header>${pulse}</section><div class="standings-layout intelligence-table-layout"><section class="standings-card"><header class="table-broadcast-head"><span>${started ? 'CLASSIFICA LIVE' : 'ELENCO SQUADRE · PRE-SEASON'}</span><small>PG partite · DR differenza reti · PPG punti per gara</small></header><div class="table-scroll"><table class="standings-table"><thead><tr><th>#</th><th>Squadra</th><th>PG</th><th>V</th><th>P</th><th>S</th><th>GF</th><th>GS</th><th>DR</th><th>PPG</th><th>PT</th></tr></thead><tbody>${tableRows}</tbody></table></div></section><aside class="league-intelligence"><span class="section-code">TABLE INTELLIGENCE</span><h3>Come leggere la corsa</h3>${tableReading}</aside></div>`;
   }
   return `<div class="view standings-view v4-standings">${viewHeader('TABLE LAB', 'Classifiche', 'Non solo posizioni: leadership, ritmo realizzativo, equilibrio della corsa e rendimento per gara.', actions)}${content}</div>`;
 }
@@ -806,7 +812,7 @@ function openMatch(id) {
   modal.dataset.eventId = match.id;
   modal.style.setProperty('--league-color', match.league.accent || '#c8ff52');
   modal.innerHTML = `<button class="modal-close" data-close-modal aria-label="Chiudi">${icon('x')}</button>
-    <header class="modal-hero"><span class="modal-competition"><i></i>${escapeHtml(match.league.label)} ${match.round ? `· ${escapeHtml(match.round)}` : ''}</span><div class="modal-fixture"><div class="modal-team">${teamLogo(match.home, 'modal-logo')}<strong>${escapeHtml(match.home.name)}</strong><button class="dna-trigger" data-team-dna="${escapeHtml(match.home.id)}" data-team-name="${escapeHtml(match.home.name)}" data-team-logo="${safeUrl(match.home.logo)}" data-team-league="${escapeHtml(match.league.id)}">TEAM DNA</button></div><div class="modal-score"><strong>${escapeHtml(status.main)}</strong><span>${escapeHtml(status.sub)}</span></div><div class="modal-team">${teamLogo(match.away, 'modal-logo')}<strong>${escapeHtml(match.away.name)}</strong><button class="dna-trigger" data-team-dna="${escapeHtml(match.away.id)}" data-team-name="${escapeHtml(match.away.name)}" data-team-logo="${safeUrl(match.away.logo)}" data-team-league="${escapeHtml(match.league.id)}">TEAM DNA</button></div></div></header>
+    <header class="modal-hero"><span class="modal-competition"><i></i>${escapeHtml(match.league.label)} ${match.round ? `· ${escapeHtml(match.round)}` : ''}</span><div class="modal-fixture"><div class="modal-team">${teamLogo(match.home, 'modal-logo')}<strong>${escapeHtml(match.home.name)}</strong><button class="dna-trigger" data-team-dna="${escapeHtml(match.home.id)}" data-team-name="${escapeHtml(match.home.name)}" data-team-logo="${escapeHtml(safeUrl(match.home.logo))}" data-team-league="${escapeHtml(match.league.id)}">TEAM DNA</button></div><div class="modal-score"><strong>${escapeHtml(status.main)}</strong><span>${escapeHtml(status.sub)}</span></div><div class="modal-team">${teamLogo(match.away, 'modal-logo')}<strong>${escapeHtml(match.away.name)}</strong><button class="dna-trigger" data-team-dna="${escapeHtml(match.away.id)}" data-team-name="${escapeHtml(match.away.name)}" data-team-logo="${escapeHtml(safeUrl(match.away.logo))}" data-team-league="${escapeHtml(match.league.id)}">TEAM DNA</button></div></div></header>
     <div class="modal-body"><div class="modal-meta-grid"><div class="modal-meta"><span>Data e ora</span><strong>${escapeHtml(displayDate(match.date, true))} · ${escapeHtml(fmtTime.format(new Date(match.date)))}</strong></div><div class="modal-meta"><span>Stadio</span><strong title="${escapeHtml(match.venue)}">${escapeHtml(match.venue)}</strong></div><div class="modal-meta"><span>Indice interesse</span><strong>${match.opportunity}/100</strong></div></div>
       <div id="matchIntelligence"><section class="deep-first-loading"><span class="intel-mark">ANALISI APPROFONDITA</span><h3>Sto costruendo la lettura della partita…</h3><p>Contesto, stagione, forma, stili, riposo, dati reali e affidabilità delle fonti.</p><i></i></section></div>
       <details class="model-drawer"><summary><div>${icon('radar')}<span><strong>Power Model 2.1</strong><small>Probabilità, gol attesi e campione statistico</small></span></div>${icon('chevron')}</summary><div id="advancedAnalysis">${analysisLoading()}</div></details>
@@ -960,7 +966,7 @@ function renderIntelligence(data) {
   const context = data.context || {};
   const aggregate = context.aggregate;
   const tournamentMarkup = (data.tournamentStats || []).length ? `<div class="tournament-intel"><span class="section-overline">NUMERI NEL TORNEO</span><div>${data.tournamentStats.map(team => `<article>${teamLogo(team, 'intel-team-logo')}<strong>${escapeHtml(team.name)}</strong><span><b>${team.goals ?? '–'}</b>gol</span><span><b>${team.conceded ?? '–'}</b>subiti</span><span><b>${team.goalDifference == null ? '–' : team.goalDifference > 0 ? `+${team.goalDifference}` : team.goalDifference}</b>diff.</span></article>`).join('')}</div></div>` : '';
-  const newsMarkup = (data.news?.articles || []).length ? data.news.articles.map(article => `<article class="intel-news" data-news-url="${safeUrl(article.link)}" tabindex="0"><header><span>${escapeHtml(article.tag)}</span><em class="${escapeHtml(article.reliability || 'da_verificare')}">${article.reliability === 'forte' ? 'Fonte forte' : article.reliability === 'media' ? 'Fonte nota' : 'Da verificare'}</em></header><h5>${escapeHtml(article.title)}</h5><div><b>${escapeHtml(article.publisher)}</b><small>${article.published ? escapeHtml(displayNewsDate(article.published)) : ''}</small>${icon('external')}</div></article>`).join('') : `<div class="intel-empty">Nessun articolo chiaramente collegato trovato nelle fonti indicizzate.</div>`;
+  const newsMarkup = (data.news?.articles || []).length ? data.news.articles.map(article => `<article class="intel-news" data-news-url="${escapeHtml(safeUrl(article.link))}" tabindex="0"><header><span>${escapeHtml(article.tag)}</span><em class="${escapeHtml(article.reliability || 'da_verificare')}">${article.reliability === 'forte' ? 'Fonte forte' : article.reliability === 'media' ? 'Fonte nota' : 'Da verificare'}</em></header><h5>${escapeHtml(article.title)}</h5><div><b>${escapeHtml(article.publisher)}</b><small>${article.published ? escapeHtml(displayNewsDate(article.published)) : ''}</small>${icon('external')}</div></article>`).join('') : `<div class="intel-empty">Nessun articolo chiaramente collegato trovato nelle fonti indicizzate.</div>`;
   const stakeText = aggregate ? `${aggregate.home}-${aggregate.away} aggregato · ${escapeHtml(context.scenario)}` : escapeHtml(context.phase || context.scenario || 'Partita singola');
   const essential = (data.critical || []).filter(item => item.type === 'Fatto').slice(0, 3);
   return `<section class="intelligence-room intelligence-clean">
@@ -1034,8 +1040,8 @@ function renderSearchResults(query) {
   const sections = [];
   if (matchResults.length) sections.push(`<div class="search-section-label">PARTITE</div>${matchResults.map(match => `<button class="search-result search-match-result" data-search-match="${escapeHtml(match.id)}"><span class="search-result-score">${match.opportunity}</span><span><strong>${escapeHtml(match.home.name)} — ${escapeHtml(match.away.name)}</strong><span>${escapeHtml(match.league.label)} · ${escapeHtml(displayDate(match.date))}</span></span>${icon('chevron')}</button>`).join('')}`);
   if (leagues.length) sections.push(`<div class="search-section-label">COMPETIZIONI</div>${leagues.map(league => `<button class="search-result" data-search-league="${league.id}"><span class="search-result-icon">${icon('table')}</span><span><strong>${escapeHtml(league.label)}</strong><span>${escapeHtml(league.country)} · calendario e classifica</span></span>${icon('chevron')}</button>`).join('')}`);
-  if (teams.length) sections.push(`<div class="search-section-label">SQUADRE</div>${teams.map(item => `<button class="search-result" data-team-dna="${escapeHtml(item.team.id)}" data-team-name="${escapeHtml(item.team.name)}" data-team-logo="${safeUrl(item.team.logo)}" data-team-league="${escapeHtml(item.matches[0].league.id)}">${teamLogo(item.team, 'search-logo')}<span><strong>${escapeHtml(item.team.name)}</strong><span>Team DNA · ${item.matches.length} ${item.matches.length === 1 ? 'partita disponibile' : 'partite disponibili'}</span></span>${icon('chevron')}</button>`).join('')}`);
-  if (newsResults.length) sections.push(`<div class="search-section-label">NEWSROOM</div>${newsResults.map(article => `<button class="search-result" data-search-news-url="${safeUrl(article.link)}"><span class="search-result-icon">${icon('news')}</span><span><strong>${escapeHtml(article.title)}</strong><span>${escapeHtml(article.source)} · ${escapeHtml(newsTopic(article))}</span></span>${icon('external')}</button>`).join('')}`);
+  if (teams.length) sections.push(`<div class="search-section-label">SQUADRE</div>${teams.map(item => `<button class="search-result" data-team-dna="${escapeHtml(item.team.id)}" data-team-name="${escapeHtml(item.team.name)}" data-team-logo="${escapeHtml(safeUrl(item.team.logo))}" data-team-league="${escapeHtml(item.matches[0].league.id)}">${teamLogo(item.team, 'search-logo')}<span><strong>${escapeHtml(item.team.name)}</strong><span>Team DNA · ${item.matches.length} ${item.matches.length === 1 ? 'partita disponibile' : 'partite disponibili'}</span></span>${icon('chevron')}</button>`).join('')}`);
+  if (newsResults.length) sections.push(`<div class="search-section-label">NEWSROOM</div>${newsResults.map(article => `<button class="search-result" data-search-news-url="${escapeHtml(safeUrl(article.link))}"><span class="search-result-icon">${icon('news')}</span><span><strong>${escapeHtml(article.title)}</strong><span>${escapeHtml(article.source)} · ${escapeHtml(newsTopic(article))}</span></span>${icon('external')}</button>`).join('')}`);
   root.innerHTML = sections.length ? sections.join('') : `<div class="search-empty">Nessun risultato per “${escapeHtml(query)}”</div>`;
 }
 
@@ -1046,6 +1052,16 @@ function toast(message, error = false) {
   el.innerHTML = `<i></i><span>${escapeHtml(message)}</span>`;
   root.append(el);
   setTimeout(() => el.remove(), 3500);
+}
+
+function updateNotificationControl() {
+  const button = $('#notificationButton');
+  if (!button) return;
+  const label = state.alertsEnabled ? 'Disattiva alert' : 'Attiva alert';
+  button.classList.toggle('enabled', state.alertsEnabled);
+  button.setAttribute('aria-pressed', String(state.alertsEnabled));
+  button.setAttribute('aria-label', label);
+  button.title = label;
 }
 
 async function toggleNotifications() {
@@ -1061,11 +1077,11 @@ async function toggleNotifications() {
     localStorage.setItem('vantaggio:alerts', 'false');
     toast('Alert disattivati');
   }
-  $('#notificationButton')?.classList.toggle('enabled', state.alertsEnabled);
+  updateNotificationControl();
 }
 
 function notifyLive(match) {
-  if (Notification.permission === 'granted') {
+  if ('Notification' in window && Notification.permission === 'granted') {
     new Notification(`${match.home.name} – ${match.away.name} è iniziata`, { body: `Segui il live score su VANTAGGIO · ${match.league.label}`, icon: match.home.logo || '/favicon.svg' });
   }
 }
@@ -1145,7 +1161,7 @@ function setupEvents() {
 function init() {
   const theme = localStorage.getItem('vantaggio:theme') || (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
   document.documentElement.dataset.theme = theme;
-  $('#notificationButton').classList.toggle('enabled', state.alertsEnabled);
+  updateNotificationControl();
   setupEvents();
   loadInitial();
   state.refreshTimer = setInterval(() => refreshAll(false), 90_000);

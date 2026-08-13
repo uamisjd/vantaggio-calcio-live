@@ -1,4 +1,4 @@
-# VANTAGGIO 4.3 — Dossier Cleanup
+# VANTAGGIO 4.3.1 — Dossier Cleanup & Audit Hardening
 
 Portale calcistico responsive in italiano che unisce calendario globale, live score, probabilità e **Match Intelligence** in un’identità ibrida esclusiva: regia broadcast, data room e magazine editoriale. Funziona senza API a pagamento, senza account utente e senza dipendenze npm.
 
@@ -20,6 +20,16 @@ Portale calcistico responsive in italiano che unisce calendario globale, live sc
 - **Gerarchia più pulita**: sotto l'analisi principale restano tre sintesi di evidenza, red flags compatte e cinque cassetti opzionali per verificare tattica, calendario, numeri, news e affidabilità.
 - **Power Model separato**: probabilità e scenari quantitativi sono conservati in un cassetto tecnico chiuso, così non nascondono più la lettura editoriale.
 - **Meno ripetizioni**: rimossi ticker broadcast, anteprima Newsroom duplicata, Signal Ledger e blocchi del dossier che ripetevano contesto, copione e quesiti già spiegati dalla Deep Analysis.
+
+## Audit Hardening V4.3.1
+
+- URL immagine vuoti non vengono più trasformati nell'indirizzo della homepage: squadre senza stemma usano le iniziali e le news senza foto restano schede editoriali pulite.
+- Le classifiche a zero partite sono dichiarate **pre-season**: nessuna falsa capolista, miglior attacco, miglior difesa o zona europea prima dell'inizio reale del torneo.
+- Date impossibili, intervalli invertiti, competizioni inesistenti e percorsi URL malformati ricevono una risposta controllata senza generare dati fuorvianti o interrompere il server.
+- Migliorati stato accessibile e descrizione del controllo notifiche; la transizione tra classifiche non conserva errori di una competizione precedente.
+- Aumentata la leggibilità del Deep Research, delle evidenze e dei testi mobile che risultavano troppo piccoli.
+- Gli asset con versione usano cache immutabile annuale, mentre la homepage continua a essere rivalidata: caricamento più rapido senza bloccare gli aggiornamenti.
+- Aggiunti audit API e test di rendering frontend per tutte le viste, dossier pre/post partita, fallback, URL, immagini mancanti e pre-season.
 
 ## Specialità V4.1
 
@@ -98,7 +108,7 @@ Le fonti possono essere parziali o cambiare formato. Il backend normalizza i dat
 - `/api/team-dna`: profilo squadra, split, fingerprint tecnico e ledger, cache 30 minuti;
 - snapshot tecnici recenti: massimo tre eventi per squadra, cache 30 minuti;
 - endpoint leggeri per partite, classifiche, notizie e stato servizio;
-- asset statici con versionamento cache `4.3.0`; cambio data automatico a mezzanotte nel fuso Europe/Rome.
+- asset statici con versionamento cache `4.3.1`; cambio data automatico a mezzanotte nel fuso Europe/Rome.
 
 ## Pubblicazione con URL stabile
 
@@ -119,9 +129,10 @@ Con il server avviato:
 ```bash
 npm run check
 npm test
+npm run audit
 ```
 
-Lo smoke test verifica homepage e asset V4.3, gerarchia dossier-first, fallback trasparente, assenza dei componenti duplicati rimossi, archivio globale di ieri, Deep Match Review, partite, notizie, classifica, Power Model 2.1, Match Intelligence 1.1, Reliability Ledger e Team DNA.
+I test verificano homepage e asset V4.3.1, tutte le viste frontend, gerarchia dossier-first, fallback trasparente, immagini mancanti, pre-season, richieste non valide, archivio globale di ieri, Deep Match Review, partite, notizie, classifiche, Power Model 2.1, Match Intelligence 1.1, Reliability Ledger e Team DNA.
 
 ## Struttura
 
@@ -129,7 +140,9 @@ Lo smoke test verifica homepage e asset V4.3, gerarchia dossier-first, fallback 
 - `public/index.html` — shell accessibile dell'app;
 - `public/styles.css` — design system responsive e Intelligence Room;
 - `public/app.js` — routing, filtri, ricerca, preferiti, modal e rendering Intelligence;
-- `scripts/smoke-test.js` — test end-to-end degli endpoint principali.
+- `scripts/smoke-test.js` — smoke test end-to-end delle funzioni principali;
+- `scripts/frontend-test.js` — rendering VM di viste, dossier e stati limite;
+- `scripts/audit-test.js` — matrice estesa di integrità API, dati e richieste non valide.
 
 ## Nota responsabile
 
