@@ -1,17 +1,25 @@
-# VANTAGGIO 4.2 — The Football Intelligence Experience
+# VANTAGGIO 4.3 — Dossier Cleanup
 
 Portale calcistico responsive in italiano che unisce calendario globale, live score, probabilità e **Match Intelligence** in un’identità ibrida esclusiva: regia broadcast, data room e magazine editoriale. Funziona senza API a pagamento, senza account utente e senza dipendenze npm.
 
 ## Esperienza V4 per ogni sezione
 
-- **Dashboard / Daily Briefing**: pulse live, agenda delle 48 ore, segnale Intelligence, copertura e ticker broadcast scorrevole.
+- **Dashboard / Daily Briefing**: pulse live, agenda delle 48 ore, segnale Intelligence e copertura, senza ticker o anteprime duplicate.
 - **Partite / Matchday Command**: ora ufficiale Europe/Rome, live control, prossimo kickoff, densità del programma e calendario a giornate.
-- **Radar / Signal Studio**: podio delle priorità, registro segnali/rischio e tavolo completo di selezione.
+- **Radar / Signal Studio**: podio delle priorità e tavolo completo di selezione, senza un secondo registro dei segnali ridondante.
 - **News / VANTAGGIO Newsroom**: apertura editoriale, titoli secondari, classificazione tematica, data ed editore visibili.
 - **Classifiche / Table Lab**: capolista, distacco, miglior attacco/difesa, ritmo gol, PPG e lettura della corsa.
 - **Preferiti / My Matchroom**: countdown, prossimo evento, dossier consultati, alert e privacy locale.
 - **Scout Search**: ricerca trasversale di partite, squadre, competizioni e notizie con navigazione da tastiera.
-- **Match dossier**: Power Model 2.1 e Intelligence Room rimangono il livello più profondo.
+- **Match dossier**: Deep Research/Review è il primo contenuto; il Power Model 2.1 resta disponibile in un cassetto tecnico separato.
+
+## Dossier Cleanup V4.3
+
+- **Analisi approfondita in primo piano su ogni partita**: il modal carica Match Intelligence prima del modello numerico e rende subito evidente il Deep Research Brief o la Deep Match Review.
+- **Copertura garantita ma trasparente**: se la richiesta Intelligence fallisce, compare un dossier ridotto con soli dati verificati di calendario, forma e modello eventualmente disponibile. La copertura parziale è dichiarata e non viene presentata come ricerca completa.
+- **Gerarchia più pulita**: sotto l'analisi principale restano tre sintesi di evidenza, red flags compatte e cinque cassetti opzionali per verificare tattica, calendario, numeri, news e affidabilità.
+- **Power Model separato**: probabilità e scenari quantitativi sono conservati in un cassetto tecnico chiuso, così non nascondono più la lettura editoriale.
+- **Meno ripetizioni**: rimossi ticker broadcast, anteprima Newsroom duplicata, Signal Ledger e blocchi del dossier che ripetevano contesto, copione e quesiti già spiegati dalla Deep Analysis.
 
 ## Specialità V4.1
 
@@ -33,7 +41,7 @@ Portale calcistico responsive in italiano che unisce calendario globale, live sc
 
 ## Match Intelligence
 
-Ogni partita analizzabile apre due livelli distinti.
+Ogni partita apre due livelli distinti. Match Intelligence è sempre il primo; se la copertura completa non è raggiungibile, il frontend mantiene un dossier ridotto e chiaramente etichettato.
 
 ### Power Model 2.1
 
@@ -43,7 +51,7 @@ Ogni partita analizzabile apre due livelli distinti.
 - classifica e consenso di mercato senza margine, quando disponibili;
 - segnali ordinati, qualità del campione e profilo di rischio.
 
-### Intelligence Room
+### Deep Analysis / Intelligence Room
 
 - fase della competizione, andata/ritorno, aggregato e posta reale;
 - stadio e contesto casa/trasferta;
@@ -56,7 +64,7 @@ Ogni partita analizzabile apre due livelli distinti.
 - Red Flags su campione ridotto, rotazioni, nuova stagione, calendario e dati mancanti;
 - separazione visiva fra **Fatto**, **Lettura** e **Da verificare**.
 
-La Intelligence Room viene caricata solo quando si apre una partita. Le chiamate più costose sono limitate e memorizzate in cache.
+La Intelligence Room viene caricata solo quando si apre una partita. La lettura editoriale viene mostrata prima; le evidenze di supporto sono raccolte in cassetti consultabili. Le chiamate più costose sono limitate e memorizzate in cache.
 
 ## Altre funzioni
 
@@ -90,7 +98,7 @@ Le fonti possono essere parziali o cambiare formato. Il backend normalizza i dat
 - `/api/team-dna`: profilo squadra, split, fingerprint tecnico e ledger, cache 30 minuti;
 - snapshot tecnici recenti: massimo tre eventi per squadra, cache 30 minuti;
 - endpoint leggeri per partite, classifiche, notizie e stato servizio;
-- asset statici con versionamento cache `4.2.0`; cambio data automatico a mezzanotte nel fuso Europe/Rome.
+- asset statici con versionamento cache `4.3.0`; cambio data automatico a mezzanotte nel fuso Europe/Rome.
 
 ## Pubblicazione con URL stabile
 
@@ -113,7 +121,7 @@ npm run check
 npm test
 ```
 
-Lo smoke test verifica homepage e asset V4.2, archivio globale di ieri, Deep Match Review, partite, notizie, classifica, Power Model 2.1, Match Intelligence 1.1, Reliability Ledger e Team DNA.
+Lo smoke test verifica homepage e asset V4.3, gerarchia dossier-first, fallback trasparente, assenza dei componenti duplicati rimossi, archivio globale di ieri, Deep Match Review, partite, notizie, classifica, Power Model 2.1, Match Intelligence 1.1, Reliability Ledger e Team DNA.
 
 ## Struttura
 

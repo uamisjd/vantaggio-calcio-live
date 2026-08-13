@@ -469,18 +469,13 @@ async function loadPowerPicks() {
 function powerPickItem(item, index) {
   const signal = item.analysis.signals?.[0];
   if (!signal) return radarItem(item.match, index);
-  return `<article class="power-pick" data-match="${escapeHtml(item.match.id)}"><span class="radar-rank">${String(index + 1).padStart(2, '0')}</span><div><strong>${escapeHtml(item.match.home.name)} — ${escapeHtml(item.match.away.name)}</strong><small>${escapeHtml(signal.label)} · qualità ${item.analysis.engine.quality}/100</small></div><b>${signal.probability}<small>%</small></b></article>`;
+  return `<article class="power-pick" data-match="${escapeHtml(item.match.id)}" role="button" tabindex="0" aria-label="Apri l’analisi di ${escapeHtml(item.match.home.name)} contro ${escapeHtml(item.match.away.name)}"><span class="radar-rank">${String(index + 1).padStart(2, '0')}</span><div><strong>${escapeHtml(item.match.home.name)} — ${escapeHtml(item.match.away.name)}</strong><small>${escapeHtml(signal.label)} · qualità ${item.analysis.engine.quality}/100</small></div><b>${signal.probability}<small>%</small></b></article>`;
 }
 
 function competitionPulse(matches) {
   const counts = new Map();
   matches.forEach(match => counts.set(match.league.label, (counts.get(match.league.label) || 0) + 1));
   return [...counts.entries()].sort((a, b) => b[1] - a[1])[0] || ['Calendario globale', 0];
-}
-
-function broadcastFixture(match) {
-  const status = statusMarkup(match);
-  return `<button class="broadcast-fixture" data-match="${escapeHtml(match.id)}"><span class="broadcast-league"><i style="--league:${escapeHtml(match.league.accent || '#758bff')}"></i>${escapeHtml(match.league.label)}</span><div>${teamLogo(match.home, 'broadcast-logo')}<strong>${escapeHtml(match.home.abbreviation || match.home.name.slice(0, 3))}</strong><b>${match.state === 'pre' ? escapeHtml(fmtTime.format(new Date(match.date))) : escapeHtml(status.main)}</b><strong>${escapeHtml(match.away.abbreviation || match.away.name.slice(0, 3))}</strong>${teamLogo(match.away, 'broadcast-logo')}</div><small>${escapeHtml(match.insight.label)} · indice ${match.opportunity}</small></button>`;
 }
 
 function changeIcon(kind) {
@@ -508,7 +503,6 @@ function renderDashboard() {
   const coveredCompetitions = state.coverage.competitions || new Set(state.matches.map(match => match.league.id)).size;
   const [busyLeague, busyCount] = competitionPulse(todayItems);
   const strongest = state.powerPicks[0];
-  const ticker = [...liveMatches, ...upcoming.filter(match => match.state !== 'in')].slice(0, 7);
   const recentChanges = state.changeLog.slice(0, 5);
   const unreadChanges = state.changeLog.filter(item => !item.seen).length;
   const watchedKickoffs = state.matches.filter(match => state.favorites.has(match.id) && match.state === 'pre').sort((a, b) => new Date(a.date) - new Date(b.date)).slice(0, 4);
@@ -520,7 +514,7 @@ function renderDashboard() {
       <div class="briefing-grid">
         <article class="briefing-card live-brief"><span>LIVE PULSE</span><strong>${liveMatches.length ? `${liveMatches.length} ${liveMatches.length === 1 ? 'partita in campo' : 'partite in campo'}` : 'Nessun live adesso'}</strong><p>${liveMatches.length ? `${liveMatches[0].home.name}–${liveMatches[0].away.name} guida il flusso live.` : `Il prossimo aggiornamento ricontrolla risultati e stati tra meno di 90 secondi.`}</p></article>
         <article class="briefing-card"><span>AGENDA</span><strong>${todayItems.length} oggi · ${in48h.length} entro 48h</strong><p>${busyCount ? `${busyLeague} è la competizione più presente oggi con ${busyCount} incontri.` : 'Il calendario si amplia quando le fonti pubblicano nuovi eventi.'}</p></article>
-        <article class="briefing-card intelligence-brief"><span>INTELLIGENCE SIGNAL</span><strong>${strongest?.analysis?.signals?.[0] ? `${strongest.analysis.signals[0].label} · ${strongest.analysis.signals[0].probability}%` : featured ? featured.insight.label : 'Analisi in preparazione'}</strong><p>${strongest ? `${strongest.match.home.name}–${strongest.match.away.name}, qualità dati ${strongest.analysis.engine.quality}/100.` : 'Il Power Model sta selezionando le partite con il campione più leggibile.'}</p></article>
+        <article class="briefing-card intelligence-brief"><span>INTELLIGENCE SIGNAL</span><strong>${strongest?.analysis?.signals?.[0] ? `${strongest.analysis.signals[0].label} · ${strongest.analysis.signals[0].probability}%` : featured ? 'Deep Analysis disponibile' : 'Analisi in preparazione'}</strong><p>${strongest ? `${strongest.match.home.name}–${strongest.match.away.name}, qualità dati ${strongest.analysis.engine.quality}/100.` : featured ? `Apri ${escapeHtml(featured.home.name)}–${escapeHtml(featured.away.name)} per il dossier con fonti, limiti e red flags.` : 'Il sistema sta selezionando le partite con il campione più leggibile.'}</p></article>
         <article class="briefing-card coverage-brief"><span>COVERAGE DESK</span><strong>${coveredCompetitions} competizioni monitorate</strong><p>Calendario globale, feed gratuiti e controlli di qualità senza abbonamenti.</p></article>
       </div>
     </section>
@@ -528,7 +522,6 @@ function renderDashboard() {
       <article class="change-desk"><header><div><span class="section-code">WHAT CHANGED DESK</span><h2>Cosa è cambiato dall’ultima visita</h2></div>${unreadChanges ? `<button data-read-changes>Segna letti <b>${unreadChanges}</b></button>` : '<span class="desk-clear">Tutto letto</span>'}</header><div>${recentChanges.length ? recentChanges.map(changeDeskItem).join('') : `<div class="specialty-empty">${icon('shield')}<div><strong>Baseline attiva</strong><p>Da questo momento confronterò orari, sedi, stati, punteggi, formazioni e nuovi eventi con la visita precedente.</p></div></div>`}</div></article>
       <article class="kickoff-watch"><header><div><span class="section-code">KICKOFF WATCH</span><h2>Controllo 60' · 30' · 10'</h2></div><span class="watch-status"><i></i>${state.alertsEnabled ? 'ALERT ON' : 'MONITOR'}</span></header><p class="kickoff-intro">Le partite salvate vengono ricontrollate vicino al calcio d’inizio: dossier, news e formazioni senza chiamate continue.</p><div>${watchedKickoffs.length ? watchedKickoffs.map(kickoffWatchItem).join('') : `<div class="specialty-empty compact">${icon('star')}<div><strong>Nessuna partita sorvegliata</strong><p>Salva una partita: entrerà automaticamente nel Kickoff Watch.</p></div></div>`}</div></article>
     </section>
-    ${ticker.length ? `<section class="broadcast-strip"><header><span>ON AIR</span><div></div><small>Scorri il matchday</small></header><div class="broadcast-track">${ticker.map(broadcastFixture).join('')}</div></section>` : ''}
     <div class="dashboard-grid editorial-dashboard-grid">
       <section class="section-card matches-card command-card">
         <header class="section-head"><div><span class="section-code">MATCHDAY CONTROL</span><h2>Oggi sul campo</h2><p>${todayItems.length} partite oggi · poi i prossimi appuntamenti</p></div><button class="section-link" data-view="matches">Apri regia ${icon('chevron')}</button></header>
@@ -541,10 +534,6 @@ function renderDashboard() {
         <div class="radar-disclaimer">${icon('info')}<span>Priorità non significa certezza: apri il dossier per controllare contesto, formazione e qualità del campione.</span></div>
       </section>
     </div>
-    <section class="news-section dashboard-newsroom">
-      <header class="plain-section-head"><div><span class="section-code">NEWSROOM</span><h2>La prima pagina del calcio</h2><p>Gerarchia editoriale, fonte visibile e accesso all’articolo originale</p></div><button class="section-link" data-view="news">Entra in redazione ${icon('arrow')}</button></header>
-      ${state.errors.news && !state.news.length ? errorBlock(state.errors.news, true) : `<div class="news-row">${state.news.slice(0, 3).map(newsCard).join('')}</div>`}
-    </section>
   </div>`;
 }
 
@@ -560,7 +549,7 @@ function renderHero(match) {
     <button class="hero-feature" data-match="${escapeHtml(match.id)}" aria-label="Analizza ${escapeHtml(match.home.name)} contro ${escapeHtml(match.away.name)}">
       <div class="hero-feature-top"><span class="hero-feature-label">IN EVIDENZA · ${escapeHtml(match.league.label)}</span><span class="score-ring" style="--score:${match.opportunity}"><span>${match.opportunity}</span></span></div>
       <div class="hero-fixture"><div class="hero-team">${teamLogo(match.home, 'hero-logo')}<strong>${escapeHtml(match.home.name)}</strong></div><div class="hero-vs"><strong>${escapeHtml(status.main)}</strong><span>${match.state === 'pre' ? escapeHtml(displayDate(match.date)) : escapeHtml(status.sub)}</span></div><div class="hero-team">${teamLogo(match.away, 'hero-logo')}<strong>${escapeHtml(match.away.name)}</strong></div></div>
-      <div class="hero-insight">${icon('radar')}<div><strong>${powerSignal ? `${escapeHtml(powerSignal.label)} · ${powerSignal.probability}%` : escapeHtml(match.insight.label)}</strong><span>${powerSignal ? `Power Model · qualità dati ${power.engine.quality}/100 · apri per tutti i dettagli` : escapeHtml(match.insight.text)}</span></div></div>
+      <div class="hero-insight">${icon('radar')}<div><strong>${powerSignal ? `${escapeHtml(powerSignal.label)} · ${powerSignal.probability}%` : 'Deep Analysis disponibile'}</strong><span>${powerSignal ? `Segnale tecnico · qualità dati ${power.engine.quality}/100 · apri per verificare il contesto` : 'Apri il dossier editoriale: fatti, forma, contesto, limiti e fonti distinti con chiarezza.'}</span></div></div>
     </button>
   </section>`;
 }
@@ -580,18 +569,21 @@ function leagueFilters(active, dataName) {
 function matchRow(match) {
   const status = statusMarkup(match);
   const favorite = state.favorites.has(match.id);
-  return `<article class="match-row" data-match="${escapeHtml(match.id)}">
-    <div class="match-meta"><span class="match-league"><i style="--league:${escapeHtml(match.league.accent)}"></i>${escapeHtml(match.league.label)}<b class="power-mini">POWER</b></span><span class="match-date">${escapeHtml(displayDate(match.date))}</span></div>
+  const dossier = state.intelligence[`${match.league.id}:${match.id}`];
+  return `<article class="match-row" data-match="${escapeHtml(match.id)}" role="button" tabindex="0" aria-label="Apri l’analisi di ${escapeHtml(match.home.name)} contro ${escapeHtml(match.away.name)}">
+    <div class="match-meta"><span class="match-league"><i style="--league:${escapeHtml(match.league.accent)}"></i>${escapeHtml(match.league.label)}<b class="power-mini">DEEP</b></span><span class="match-date">${escapeHtml(displayDate(match.date))}</span></div>
     <div class="match-team home">${teamLogo(match.home)}<div><strong>${escapeHtml(match.home.name)}</strong>${formMarkup(match.home.form)}</div></div>
     <div class="match-center ${status.className}"><span class="match-time ${match.state === 'in' ? 'live-pill' : ''}">${escapeHtml(status.main)}</span><span class="match-status">${escapeHtml(status.sub)}</span></div>
     <div class="match-team away">${teamLogo(match.away)}<div><strong>${escapeHtml(match.away.name)}</strong>${formMarkup(match.away.form)}</div></div>
-    <div class="opportunity-cell"><strong>${match.opportunity}/100</strong><span>${escapeHtml(match.insight.label)}</span></div>
+    <div class="opportunity-cell"><strong>${match.opportunity}/100</strong><span>${dossier ? (dossier.deepDive?.mode === 'post' ? 'Review pronta' : 'Analisi pronta') : 'Analisi profonda'}</span></div>
     <button class="favorite-button ${favorite ? 'active' : ''}" data-favorite="${escapeHtml(match.id)}" aria-label="${favorite ? 'Rimuovi dai' : 'Aggiungi ai'} preferiti">${icon('star')}</button>
   </article>`;
 }
 
 function radarItem(match, index) {
-  return `<article class="radar-item" data-match="${escapeHtml(match.id)}"><span class="radar-rank">${String(index + 1).padStart(2, '0')}</span><div class="radar-names"><strong>${escapeHtml(match.home.name)} — ${escapeHtml(match.away.name)}</strong><span>${escapeHtml(match.insight.label)} · ${escapeHtml(displayDate(match.date))}</span></div><div class="radar-score"><strong>${match.opportunity}</strong><span>indice</span></div></article>`;
+  const analysis = state.analyses[`${match.league.id}:${match.id}`];
+  const signal = analysis?.signals?.[0];
+  return `<article class="radar-item" data-match="${escapeHtml(match.id)}" role="button" tabindex="0" aria-label="Apri l’analisi di ${escapeHtml(match.home.name)} contro ${escapeHtml(match.away.name)}"><span class="radar-rank">${String(index + 1).padStart(2, '0')}</span><div class="radar-names"><strong>${escapeHtml(match.home.name)} — ${escapeHtml(match.away.name)}</strong><span>${signal ? `${escapeHtml(signal.label)} · ${signal.probability}%` : `Deep Research · ${escapeHtml(displayDate(match.date))}`}</span></div><div class="radar-score"><strong>${match.opportunity}</strong><span>indice</span></div></article>`;
 }
 
 function newsCard(article) {
@@ -636,21 +628,27 @@ function radarSpotlight(match, index) {
   const analysis = state.analyses[`${match.league.id}:${match.id}`];
   const signal = analysis?.signals?.[0];
   const labels = ['PRIORITÀ DEL GIORNO', 'SECONDA LETTURA', 'OUTSIDER DA STUDIARE'];
-  return `<article class="radar-spotlight rank-${index + 1}" data-match="${escapeHtml(match.id)}"><header><span>${labels[index]}</span><b>${String(index + 1).padStart(2, '0')}</b></header><div class="radar-spotlight-teams"><div>${teamLogo(match.home, 'spotlight-logo')}<strong>${escapeHtml(match.home.name)}</strong></div><i>—</i><div>${teamLogo(match.away, 'spotlight-logo')}<strong>${escapeHtml(match.away.name)}</strong></div></div><div class="spotlight-signal"><span>${signal ? escapeHtml(signal.label) : escapeHtml(match.insight.label)}</span><strong>${signal ? signal.probability : match.opportunity}<small>${signal ? '%' : '/100'}</small></strong></div><footer><span>${escapeHtml(match.league.label)}</span><span>${escapeHtml(displayDate(match.date))} · ${escapeHtml(fmtTime.format(new Date(match.date)))}</span><span>Rischio ${escapeHtml(analysis?.assessment?.risk || match.insight.risk)}</span></footer></article>`;
+  return `<article class="radar-spotlight rank-${index + 1}" data-match="${escapeHtml(match.id)}" role="button" tabindex="0" aria-label="Apri l’analisi di ${escapeHtml(match.home.name)} contro ${escapeHtml(match.away.name)}"><header><span>${labels[index]}</span><b>${String(index + 1).padStart(2, '0')}</b></header><div class="radar-spotlight-teams"><div>${teamLogo(match.home, 'spotlight-logo')}<strong>${escapeHtml(match.home.name)}</strong></div><i>—</i><div>${teamLogo(match.away, 'spotlight-logo')}<strong>${escapeHtml(match.away.name)}</strong></div></div><div class="spotlight-signal"><span>${signal ? escapeHtml(signal.label) : 'Deep Research'}</span><strong>${signal ? signal.probability : match.opportunity}<small>${signal ? '%' : '/100'}</small></strong></div><footer><span>${escapeHtml(match.league.label)}</span><span>${escapeHtml(displayDate(match.date))} · ${escapeHtml(fmtTime.format(new Date(match.date)))}</span><span>Rischio ${escapeHtml(analysis?.assessment?.risk || 'da verificare')}</span></footer></article>`;
+}
+
+function radarTableRow(match, index) {
+  const analysis = state.analyses[`${match.league.id}:${match.id}`];
+  const signal = analysis?.signals?.[0];
+  const risk = analysis?.assessment?.risk || 'Da verificare';
+  const riskClass = risk === 'Alto' ? 'high' : risk === 'Basso' ? 'low' : '';
+  return `<article class="radar-table-row" data-match="${escapeHtml(match.id)}" role="button" tabindex="0" aria-label="Apri l’analisi di ${escapeHtml(match.home.name)} contro ${escapeHtml(match.away.name)}"><span class="radar-position">${index + 1}</span><div class="radar-match-main"><strong>${escapeHtml(match.home.name)} — ${escapeHtml(match.away.name)}</strong><span>${escapeHtml(match.league.label)} · ${escapeHtml(displayDate(match.date))} · ${escapeHtml(fmtTime.format(new Date(match.date)))}</span></div><span class="insight-badge">${signal ? `${escapeHtml(signal.label)} · ${signal.probability}%` : 'Deep Research'}</span><span class="risk-badge ${riskClass}"><i></i>${escapeHtml(risk)}</span><span class="radar-value">${match.opportunity}<small>/100</small></span>${icon('chevron')}</article>`;
 }
 
 function renderRadarView() {
   const matches = radarMatches(30);
   const podium = matches.slice(0, 3);
   const highIndex = matches.filter(match => match.opportunity >= 75).length;
-  const lowRisk = matches.filter(match => match.insight.risk === 'Basso').length;
-  const analysesReady = matches.filter(match => state.analyses[`${match.league.id}:${match.id}`]).length;
+  const dossierAccess = matches.length ? 100 : 0;
   return `<div class="view radar-view v4-radar">
     ${viewHeader('SIGNAL STUDIO', 'Match Radar', 'Non una lista di pronostici: una sala di selezione che separa interesse, robustezza del campione e rischio contestuale.')}
-    <section class="radar-studio-hero"><div><span class="broadcast-label"><i></i>MODEL ROOM</span><h2>Prima scegli cosa merita attenzione.<br><em>Poi verifica perché.</em></h2><p>Il Radar ordina il calendario; il dossier Intelligence controlla aggregato, riposo, stili, formazioni e red flags. Un indice alto senza contesto non basta.</p></div><div class="studio-orbit"><span><b>${matches.length}</b>gare lette</span><span><b>${highIndex}</b>indice 75+</span><span><b>${analysesReady}</b>dossier pronti</span></div></section>
+    <section class="radar-studio-hero"><div><span class="broadcast-label"><i></i>MODEL ROOM</span><h2>Prima scegli cosa merita attenzione.<br><em>Poi verifica perché.</em></h2><p>Il Radar ordina il calendario; il dossier Intelligence controlla aggregato, riposo, stili, formazioni e red flags. Un indice alto senza contesto non basta.</p></div><div class="studio-orbit"><span><b>${matches.length}</b>gare lette</span><span><b>${highIndex}</b>indice 75+</span><span><b>${dossierAccess}%</b>accesso dossier</span></div></section>
     ${podium.length ? `<section class="radar-podium">${podium.map(radarSpotlight).join('')}</section>` : ''}
-    <section class="signal-ledger"><article><span>SEGNALE FORTE</span><strong>${highIndex}</strong><p>Indice preliminare almeno 75/100</p></article><article><span>RISCHIO BASSO</span><strong>${lowRisk}</strong><p>Profilo base meno volatile</p></article><article><span>CONTROLLO NECESSARIO</span><strong>${Math.max(0, matches.length - analysesReady)}</strong><p>Dossier profondo non ancora aperto</p></article><article class="ledger-rule">${icon('shield')}<div><strong>Regola VANTAGGIO</strong><p>Mai confondere probabilità alta con certezza. Il contesto può cambiare il valore della singola gara.</p></div></article></section>
-    ${matches.length ? `<section class="radar-table studio-table"><header class="section-head"><div><span class="section-code">RANKING COMPLETO</span><h2>Tavolo di selezione</h2><p>Tutte le partite ordinate per interesse analitico</p></div></header><header class="radar-table-head"><span>#</span><span>Partita</span><span>Lettura</span><span>Rischio</span><span>Indice</span><span></span></header>${matches.map((match, index) => `<article class="radar-table-row" data-match="${escapeHtml(match.id)}"><span class="radar-position">${index + 1}</span><div class="radar-match-main"><strong>${escapeHtml(match.home.name)} — ${escapeHtml(match.away.name)}</strong><span>${escapeHtml(match.league.label)} · ${escapeHtml(displayDate(match.date))} · ${escapeHtml(fmtTime.format(new Date(match.date)))}</span></div><span class="insight-badge">${escapeHtml(match.insight.label)}</span><span class="risk-badge ${match.insight.risk === 'Alto' ? 'high' : match.insight.risk === 'Basso' ? 'low' : ''}"><i></i>${escapeHtml(match.insight.risk)}</span><span class="radar-value">${match.opportunity}<small>/100</small></span>${icon('chevron')}</article>`).join('')}</section>` : emptyState('radar', 'Radar in attesa', 'Nessun incontro futuro disponibile nel periodo monitorato.')}
+    ${matches.length ? `<section class="radar-table studio-table"><header class="section-head"><div><span class="section-code">RANKING COMPLETO</span><h2>Tavolo di selezione</h2><p>Tutte le partite ordinate per interesse analitico</p></div></header><header class="radar-table-head"><span>#</span><span>Partita</span><span>Lettura</span><span>Rischio</span><span>Indice</span><span></span></header>${matches.map(radarTableRow).join('')}</section>` : emptyState('radar', 'Radar in attesa', 'Nessun incontro futuro disponibile nel periodo monitorato.')}
   </div>`;
 }
 
@@ -810,14 +808,21 @@ function openMatch(id) {
   modal.innerHTML = `<button class="modal-close" data-close-modal aria-label="Chiudi">${icon('x')}</button>
     <header class="modal-hero"><span class="modal-competition"><i></i>${escapeHtml(match.league.label)} ${match.round ? `· ${escapeHtml(match.round)}` : ''}</span><div class="modal-fixture"><div class="modal-team">${teamLogo(match.home, 'modal-logo')}<strong>${escapeHtml(match.home.name)}</strong><button class="dna-trigger" data-team-dna="${escapeHtml(match.home.id)}" data-team-name="${escapeHtml(match.home.name)}" data-team-logo="${safeUrl(match.home.logo)}" data-team-league="${escapeHtml(match.league.id)}">TEAM DNA</button></div><div class="modal-score"><strong>${escapeHtml(status.main)}</strong><span>${escapeHtml(status.sub)}</span></div><div class="modal-team">${teamLogo(match.away, 'modal-logo')}<strong>${escapeHtml(match.away.name)}</strong><button class="dna-trigger" data-team-dna="${escapeHtml(match.away.id)}" data-team-name="${escapeHtml(match.away.name)}" data-team-logo="${safeUrl(match.away.logo)}" data-team-league="${escapeHtml(match.league.id)}">TEAM DNA</button></div></div></header>
     <div class="modal-body"><div class="modal-meta-grid"><div class="modal-meta"><span>Data e ora</span><strong>${escapeHtml(displayDate(match.date, true))} · ${escapeHtml(fmtTime.format(new Date(match.date)))}</strong></div><div class="modal-meta"><span>Stadio</span><strong title="${escapeHtml(match.venue)}">${escapeHtml(match.venue)}</strong></div><div class="modal-meta"><span>Indice interesse</span><strong>${match.opportunity}/100</strong></div></div>
-      <div id="advancedAnalysis">${analysisLoading()}</div>
-      <div id="matchIntelligence"><section class="intel-loading"><span class="intel-mark">INTELLIGENCE</span><strong>Preparo contesto, tattica, calendario e notizie…</strong><i></i></section></div>
+      <div id="matchIntelligence"><section class="deep-first-loading"><span class="intel-mark">ANALISI APPROFONDITA</span><h3>Sto costruendo la lettura della partita…</h3><p>Contesto, stagione, forma, stili, riposo, dati reali e affidabilità delle fonti.</p><i></i></section></div>
+      <details class="model-drawer"><summary><div>${icon('radar')}<span><strong>Power Model 2.1</strong><small>Probabilità, gol attesi e campione statistico</small></span></div>${icon('chevron')}</summary><div id="advancedAnalysis">${analysisLoading()}</div></details>
       <div class="modal-actions"><button class="button ${favorite ? '' : 'primary'}" data-favorite="${escapeHtml(match.id)}">${icon('star')} ${favorite ? 'Rimuovi dai salvati' : 'Salva partita'}</button><button class="button" data-close-modal>Chiudi</button></div>
     </div>`;
   $('#modalLayer').hidden = false;
   document.body.style.overflow = 'hidden';
   setTimeout(() => $('.modal-close', modal)?.focus(), 20);
-  loadAnalysis(match).then(() => loadIntelligence(match));
+  loadIntelligence(match).then(() => loadAnalysis(match));
+}
+
+function renderFallbackDeepAnalysis(match, analysis = null, error = '') {
+  const homeRecent = analysis?.recent?.home;
+  const awayRecent = analysis?.recent?.away;
+  const signal = analysis?.signals?.[0];
+  return `<section class="deep-dive fallback"><header><div><span>DEEP RESEARCH · COPERTURA RIDOTTA</span><h3>${escapeHtml(match.home.name)}–${escapeHtml(match.away.name)}: ciò che possiamo confermare</h3><p>${escapeHtml(match.league.label)} · ${escapeHtml(displayDate(match.date, true))} · ${escapeHtml(fmtTime.format(new Date(match.date)))} · ${escapeHtml(match.venue || 'sede non disponibile')}</p></div><b>PARZIALE</b></header><div class="deep-number-grid"><article><span>Stato</span><strong>${escapeHtml(statusMarkup(match).main)}</strong><small>${escapeHtml(statusMarkup(match).sub)}</small></article><article><span>Forma casa</span><strong>${escapeHtml(match.home.form || 'n/d')}</strong><small>${escapeHtml(match.home.name)}</small></article><article><span>Forma ospite</span><strong>${escapeHtml(match.away.form || 'n/d')}</strong><small>${escapeHtml(match.away.name)}</small></article>${signal ? `<article><span>Segnale modello</span><strong>${signal.probability}%</strong><small>${escapeHtml(signal.label)}</small></article>` : ''}${homeRecent ? `<article><span>Gol casa</span><strong>${homeRecent.avgGoalsFor ?? '–'}</strong><small>media recente</small></article>` : ''}${awayRecent ? `<article><span>Gol ospite</span><strong>${awayRecent.avgGoalsFor ?? '–'}</strong><small>media recente</small></article>` : ''}</div><div class="fallback-evidence"><article><span>FATTI DISPONIBILI</span><p>Data, competizione, sede, stato e forma sintetica provengono dal calendario globale.</p></article><article><span>PERCHÉ È PARZIALE</span><p>${escapeHtml(error || 'Il riepilogo tecnico completo non è stato pubblicato dalla fonte.')}</p></article><article><span>REGOLA DI QUALITÀ</span><p>Non trasformiamo dati mancanti in statistiche inventate. Il dossier si completa automaticamente quando la fonte pubblica boxscore e contesto.</p></article></div></section>`;
 }
 
 function analysisLoading() {
@@ -836,6 +841,8 @@ async function loadAnalysis(match, force = false) {
     const payload = await api(`/api/analysis?event=${encodeURIComponent(match.id)}&league=${encodeURIComponent(match.league.id)}${force ? '&fresh=1' : ''}`);
     state.analyses[key] = payload.data;
     if ($('#matchModal')?.dataset.eventId === match.id && $('#advancedAnalysis')) $('#advancedAnalysis').innerHTML = renderPowerAnalysis(payload.data);
+    const intelRoot = $('#matchIntelligence');
+    if ($('#matchModal')?.dataset.eventId === match.id && intelRoot?.dataset.fallback === '1') intelRoot.innerHTML = renderFallbackDeepAnalysis(match, payload.data, intelRoot.dataset.error || 'Riepilogo completo non disponibile');
   } catch (error) {
     if ($('#matchModal')?.dataset.eventId === match.id && $('#advancedAnalysis')) {
       $('#advancedAnalysis').innerHTML = `<section class="power-error">${icon('info')}<div><strong>Analisi avanzata non disponibile</strong><p>${escapeHtml(error.message)}. Restano validi calendario, forma sintetica e dati live.</p></div></section>`;
@@ -902,11 +909,15 @@ async function loadIntelligence(match, force = false) {
     const previous = state.intelligence[key];
     const payload = await api(`/api/intelligence?event=${encodeURIComponent(match.id)}&league=${encodeURIComponent(match.league.id)}${force ? '&fresh=1' : ''}`);
     state.intelligence[key] = payload.data;
+    if ($('#matchIntelligence')) { delete $('#matchIntelligence').dataset.fallback; delete $('#matchIntelligence').dataset.error; }
     if (!previous?.lineups?.official && payload.data.lineups?.official) addChange('lineup', 'Formazioni ufficiali pubblicate', `Gli undici di ${match.home.name}–${match.away.name} sono disponibili nel dossier.`, match, 'official');
     if ($('#matchModal')?.dataset.eventId === match.id && $('#matchIntelligence')) $('#matchIntelligence').innerHTML = renderIntelligence(payload.data);
   } catch (error) {
     if ($('#matchModal')?.dataset.eventId === match.id && $('#matchIntelligence')) {
-      $('#matchIntelligence').innerHTML = `<section class="power-error">${icon('info')}<div><strong>Intelligence Room non disponibile</strong><p>${escapeHtml(error.message)}. Il Power Model resta comunque utilizzabile.</p></div></section>`;
+      const fallbackRoot = $('#matchIntelligence');
+      fallbackRoot.dataset.fallback = '1';
+      fallbackRoot.dataset.error = error.message;
+      fallbackRoot.innerHTML = renderFallbackDeepAnalysis(match, state.analyses[key], error.message);
     }
   }
 }
@@ -948,24 +959,25 @@ function renderIntelligence(data) {
   const away = data.event.away;
   const context = data.context || {};
   const aggregate = context.aggregate;
-  const aggregateMarkup = aggregate ? `<div class="aggregate-board"><span>${teamLogo(home, 'aggregate-logo')}<b>${aggregate.home}</b></span><i>AGGREGATO</i><span><b>${aggregate.away}</b>${teamLogo(away, 'aggregate-logo')}</span></div>` : '';
   const tournamentMarkup = (data.tournamentStats || []).length ? `<div class="tournament-intel"><span class="section-overline">NUMERI NEL TORNEO</span><div>${data.tournamentStats.map(team => `<article>${teamLogo(team, 'intel-team-logo')}<strong>${escapeHtml(team.name)}</strong><span><b>${team.goals ?? '–'}</b>gol</span><span><b>${team.conceded ?? '–'}</b>subiti</span><span><b>${team.goalDifference == null ? '–' : team.goalDifference > 0 ? `+${team.goalDifference}` : team.goalDifference}</b>diff.</span></article>`).join('')}</div></div>` : '';
   const newsMarkup = (data.news?.articles || []).length ? data.news.articles.map(article => `<article class="intel-news" data-news-url="${safeUrl(article.link)}" tabindex="0"><header><span>${escapeHtml(article.tag)}</span><em class="${escapeHtml(article.reliability || 'da_verificare')}">${article.reliability === 'forte' ? 'Fonte forte' : article.reliability === 'media' ? 'Fonte nota' : 'Da verificare'}</em></header><h5>${escapeHtml(article.title)}</h5><div><b>${escapeHtml(article.publisher)}</b><small>${article.published ? escapeHtml(displayNewsDate(article.published)) : ''}</small>${icon('external')}</div></article>`).join('') : `<div class="intel-empty">Nessun articolo chiaramente collegato trovato nelle fonti indicizzate.</div>`;
-  return `<section class="intelligence-room">
-    <header class="intel-title"><div><span class="intel-mark">MATCH INTELLIGENCE</span><h3>Quello che i numeri non raccontano</h3></div><div class="intel-live"><i></i>AFFIDABILITÀ ${data.reliability?.overall ?? '–'}/100</div></header>
-    <article class="context-spotlight"><div><span>LA COSA PIÙ IMPORTANTE DA SAPERE</span><h4>${escapeHtml(context.scenario || 'Contesto partita')}</h4><p>${escapeHtml(context.facts?.[0] || data.keyQuestion)}</p>${context.venue?.name ? `<div class="intel-venue">${icon('pin')}<span>${escapeHtml(context.venue.name)}${context.venue.city ? ` · ${escapeHtml(context.venue.city)}` : ''}${context.venue.country ? `, ${escapeHtml(context.venue.country)}` : ''}</span></div>` : ''}</div>${aggregateMarkup}</article>
-    ${data.deepDive?.mode === 'pre' ? `<article class="key-question">${icon('radar')}<div><span>LA DOMANDA DECISIVA</span><strong>${escapeHtml(data.keyQuestion)}</strong></div></article>` : ''}
+  const stakeText = aggregate ? `${aggregate.home}-${aggregate.away} aggregato · ${escapeHtml(context.scenario)}` : escapeHtml(context.phase || context.scenario || 'Partita singola');
+  const essential = (data.critical || []).filter(item => item.type === 'Fatto').slice(0, 3);
+  return `<section class="intelligence-room intelligence-clean">
+    <header class="intel-title clean-title"><div><span class="intel-mark">MATCH INTELLIGENCE</span><h3>Analisi approfondita</h3></div><div class="intel-live"><i></i>AFFIDABILITÀ ${data.reliability?.overall ?? '–'}/100</div></header>
     ${deepDiveMarkup(data.deepDive)}
-    <div class="intel-legend"><span><i class="fact"></i>Fatto dal feed</span><span><i class="reading"></i>Lettura derivata</span><span><i class="verify"></i>Da verificare</span></div>
-    <section class="critical-grid">${(data.critical || []).map(item => `<article class="critical-item ${item.type.toLowerCase()} ${item.level}"><span>${escapeHtml(item.type)}</span><h5>${escapeHtml(item.title)}</h5><p>${escapeHtml(item.text)}</p></article>`).join('')}</section>
-    ${data.deepDive?.mode === 'post' ? '' : `<details class="intel-details" open><summary><div><span>01</span><strong>Copione probabile della gara</strong></div>${icon('chevron')}</summary><div class="match-script">${(data.script || []).map(step => `<article><span>${escapeHtml(step.phase)}</span><div><strong>${escapeHtml(step.title)}</strong><p>${escapeHtml(step.text)}</p></div></article>`).join('')}</div>${(context.incentives || []).length ? `<div class="incentive-box"><strong>Incentivi tattici</strong>${context.incentives.map(text => `<p>${icon('arrow')}<span>${escapeHtml(text)}</span></p>`).join('')}</div>` : ''}</details>`}
-    <details class="intel-details" open><summary><div><span>02</span><strong>Tactical DNA osservato</strong></div>${icon('chevron')}</summary><div class="tactical-grid">${tacticalCard(data.tactical.home, home)}${tacticalCard(data.tactical.away, away)}</div><div class="matchup-box"><span>INCROCIO DI STILI</span>${(data.tactical.matchup || []).map(text => `<p>${escapeHtml(text)}</p>`).join('')}</div></details>
-    <details class="intel-details"><summary><div><span>03</span><strong>Calendario, recupero e pressione</strong></div>${icon('chevron')}</summary><div class="calendar-intel-grid">${calendarIntelCard(data.calendar.home, home)}${calendarIntelCard(data.calendar.away, away)}</div></details>
-    <details class="intel-details"><summary><div><span>04</span><strong>Numeri e giocatori chiave nel torneo</strong></div>${icon('chevron')}</summary>${tournamentMarkup}<div class="leaders-intel-grid">${(data.leaders || []).map(leaderIntelCard).join('') || '<div class="intel-empty">Leader del torneo non disponibili nel feed.</div>'}</div></details>
-    <details class="intel-details"><summary><div><span>05</span><strong>Formazioni e disponibilità</strong></div>${icon('chevron')}</summary>${lineupIntel(data.lineups, data.availability)}</details>
-    <details class="intel-details"><summary><div><span>06</span><strong>News Pulse collegato alla partita</strong></div>${icon('chevron')}</summary><div class="intel-news-grid">${newsMarkup}</div><p class="news-disclaimer">${escapeHtml(data.news?.disclaimer || '')}</p></details>
-    <details class="intel-details reliability-details"><summary><div><span>07</span><strong>Data Reliability Ledger</strong></div>${icon('chevron')}</summary>${reliabilityLedgerMarkup(data.reliability, true)}</details>
-    ${(data.alerts || []).length ? `<section class="red-flags"><header>${icon('info')}<div><span>RED FLAGS</span><strong>Cosa può invalidare una lettura superficiale</strong></div></header>${data.alerts.map(alert => `<article class="${alert.level}"><i></i><div><strong>${escapeHtml(alert.title)}</strong><p>${escapeHtml(alert.text)}</p></div></article>`).join('')}</section>` : ''}
+    <section class="evidence-summary">
+      <article><span>CONTESTO</span><strong>${stakeText}</strong><p>${escapeHtml(context.venue?.name || 'Sede non disponibile')}${context.venue?.city ? ` · ${escapeHtml(context.venue.city)}` : ''}</p></article>
+      <article><span>FORMAZIONI</span><strong>${data.lineups?.official ? 'Ufficiali' : 'In attesa'}</strong><p>${data.lineups?.official ? 'Entrambi gli undici presenti nel feed.' : 'Non vengono ipotizzate.'}</p></article>
+      <article><span>COPERTURA</span><strong>${data.tactical.home.observedGames + data.tactical.away.observedGames} boxscore tecnici</strong><p>${essential[0] ? escapeHtml(essential[0].text) : 'Campione dichiarato nel dossier.'}</p></article>
+    </section>
+    ${(data.alerts || []).length ? `<section class="red-flags compact-flags"><header>${icon('info')}<div><span>RED FLAGS</span><strong>Prima di fidarti della lettura</strong></div></header>${data.alerts.slice(0, 4).map(alert => `<article class="${alert.level}"><i></i><div><strong>${escapeHtml(alert.title)}</strong><p>${escapeHtml(alert.text)}</p></div></article>`).join('')}</section>` : ''}
+    <div class="intel-clean-hub"><span class="section-code">EVIDENZE CONSULTABILI</span><h3>Apri solo ciò che vuoi verificare</h3><p>L’analisi principale è sopra. Qui restano dati, fonti e campioni senza ripetere la stessa storia.</p></div>
+    <details class="intel-details"><summary><div><span>01</span><strong>Tattica e boxscore osservati</strong></div>${icon('chevron')}</summary><div class="tactical-grid">${tacticalCard(data.tactical.home, home)}${tacticalCard(data.tactical.away, away)}</div><div class="matchup-box"><span>INCROCIO DI STILI</span>${(data.tactical.matchup || []).map(text => `<p>${escapeHtml(text)}</p>`).join('')}</div></details>
+    <details class="intel-details"><summary><div><span>02</span><strong>Calendario, formazioni e disponibilità</strong></div>${icon('chevron')}</summary><div class="calendar-intel-grid">${calendarIntelCard(data.calendar.home, home)}${calendarIntelCard(data.calendar.away, away)}</div>${lineupIntel(data.lineups, data.availability)}</details>
+    <details class="intel-details"><summary><div><span>03</span><strong>Numeri e giocatori nel torneo</strong></div>${icon('chevron')}</summary>${tournamentMarkup}<div class="leaders-intel-grid">${(data.leaders || []).map(leaderIntelCard).join('') || '<div class="intel-empty">Leader del torneo non disponibili nel feed.</div>'}</div></details>
+    <details class="intel-details"><summary><div><span>04</span><strong>News collegate e fonti</strong></div>${icon('chevron')}</summary><div class="intel-news-grid">${newsMarkup}</div><p class="news-disclaimer">${escapeHtml(data.news?.disclaimer || '')}</p></details>
+    <details class="intel-details reliability-details"><summary><div><span>05</span><strong>Data Reliability Ledger</strong></div>${icon('chevron')}</summary>${reliabilityLedgerMarkup(data.reliability, true)}</details>
     <div class="intel-method">${icon('shield')}<span>${escapeHtml(data.methodology)}</span></div>
   </section>`;
 }
@@ -1120,6 +1132,7 @@ function setupEvents() {
         results[next].focus();
       }
     }
+    if (['Enter', ' '].includes(event.key) && event.target.matches('[data-match][role="button"]')) { event.preventDefault(); openMatch(event.target.dataset.match); }
     if (event.key === 'Enter' && event.target.matches('.news-card, .intel-news, .newsroom-side-story, .lead-story')) event.target.click();
   });
 
