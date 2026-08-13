@@ -10,7 +10,10 @@ async function get(path, type = 'json') {
 
 (async () => {
   const html = await get('/', 'text');
-  if (!html.includes('VANTAGGIO') || !html.includes('/app.js?v=3.0.1') || !html.includes('/styles.css?v=3.0.1')) throw new Error('Homepage o asset V3 non validi');
+  if (!html.includes('VANTAGGIO') || !html.includes('/app.js?v=4.0.0') || !html.includes('/styles.css?v=4.0.0')) throw new Error('Homepage o asset V4 non validi');
+  const [appJs, styles] = await Promise.all([get('/app.js?v=4.0.0', 'text'), get('/styles.css?v=4.0.0', 'text')]);
+  const v4Modules = ['DAILY BRIEFING', 'MATCHDAY COMMAND', 'SIGNAL STUDIO', 'VANTAGGIO NEWSROOM', 'TABLE LAB', 'MY MATCHROOM', 'SCOUT SEARCH'];
+  if (!v4Modules.every(module => appJs.includes(module)) || !styles.includes('VANTAGGIO 4.0')) throw new Error('Moduli esperienza V4 incompleti');
 
   const status = await get('/api/status');
   if (!status.ok || status.timezone !== 'Europe/Rome' || status.leagues.length < 5) throw new Error('Status API non valido');
@@ -38,7 +41,7 @@ async function get(path, type = 'json') {
   if (!Array.isArray(intel.script) || !intel.script.length || !Array.isArray(intel.alerts) || !intel.lineups || !intel.availability || !Array.isArray(intel.news?.articles)) throw new Error('Match Intelligence incompleta');
   if (typeof intel.tactical.home?.observedGames !== 'number' || typeof intel.tactical.away?.observedGames !== 'number') throw new Error('Campione tattico non dichiarato');
 
-  console.log(`✓ Homepage V3 e asset cache serviti`);
+  console.log(`✓ Homepage V4 e asset cache serviti`);
   console.log(`✓ ${matches.data.matches.length} partite in ${matches.data.coverage?.competitions || 0} competizioni`);
   console.log(`✓ Power Model 2.1 operativo su ${analyzable.home.name}–${analyzable.away.name}`);
   console.log(`✓ Match Intelligence: ${intel.critical.length} evidenze, ${intel.alerts.length} alert, campione tecnico ${intel.tactical.home.observedGames}+${intel.tactical.away.observedGames}`);

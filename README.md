@@ -1,6 +1,17 @@
-# VANTAGGIO 3.0 — Match Intelligence
+# VANTAGGIO 4.0 — The Football Intelligence Experience
 
-Portale calcistico responsive in italiano che unisce calendario globale, live score, probabilità e un livello di **Match Intelligence** pensato per spiegare che cosa conta davvero prima di una partita. Funziona senza API a pagamento, senza account utente e senza dipendenze npm.
+Portale calcistico responsive in italiano che unisce calendario globale, live score, probabilità e **Match Intelligence** in un’identità ibrida esclusiva: regia broadcast, data room e magazine editoriale. Funziona senza API a pagamento, senza account utente e senza dipendenze npm.
+
+## Esperienza V4 per ogni sezione
+
+- **Dashboard / Daily Briefing**: pulse live, agenda delle 48 ore, segnale Intelligence, copertura e ticker broadcast scorrevole.
+- **Partite / Matchday Command**: ora ufficiale Europe/Rome, live control, prossimo kickoff, densità del programma e calendario a giornate.
+- **Radar / Signal Studio**: podio delle priorità, registro segnali/rischio e tavolo completo di selezione.
+- **News / VANTAGGIO Newsroom**: apertura editoriale, titoli secondari, classificazione tematica, data ed editore visibili.
+- **Classifiche / Table Lab**: capolista, distacco, miglior attacco/difesa, ritmo gol, PPG e lettura della corsa.
+- **Preferiti / My Matchroom**: countdown, prossimo evento, dossier consultati, alert e privacy locale.
+- **Scout Search**: ricerca trasversale di partite, squadre, competizioni e notizie con navigazione da tastiera.
+- **Match dossier**: Power Model 2.1 e Intelligence Room rimangono il livello più profondo.
 
 ## Match Intelligence
 
@@ -60,7 +71,7 @@ Le fonti possono essere parziali o cambiare formato. Il backend normalizza i dat
 - `/api/intelligence`: calendario, tattica, copione, giocatori e news, cache separata 10 minuti;
 - snapshot tecnici recenti: massimo tre eventi per squadra, cache 30 minuti;
 - endpoint leggeri per partite, classifiche, notizie e stato servizio;
-- asset statici con versionamento cache `3.0.1`; cambio data automatico a mezzanotte nel fuso Europe/Rome.
+- asset statici con versionamento cache `4.0.0`; cambio data automatico a mezzanotte nel fuso Europe/Rome.
 
 ## Pubblicazione con URL stabile
 
@@ -83,7 +94,7 @@ npm run check
 npm test
 ```
 
-Lo smoke test verifica homepage e asset V3, stato servizio, partite, notizie, classifica, schema Power Model 2.1 e schema Match Intelligence, inclusa la distinzione fra fatti, letture e verifiche.
+Lo smoke test verifica homepage e asset V4, stato servizio, partite, notizie, classifica, schema Power Model 2.1 e schema Match Intelligence, inclusa la distinzione fra fatti, letture e verifiche.
 
 ## Struttura
 

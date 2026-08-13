@@ -76,6 +76,11 @@ function displayDate(value, long = false) {
   return (long ? fmtLongDay : fmtDay).format(new Date(value));
 }
 
+function displayNewsDate(value) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? 'Data non disponibile' : fmtNewsDate.format(date);
+}
+
 function formScore(form = '') {
   const values = String(form).toUpperCase().replace(/[^VPSWDL]/g, '').replaceAll('W', 'V').replaceAll('D', 'P').replaceAll('L', 'S').slice(-5).split('');
   if (!values.length) return 50;
@@ -359,40 +364,56 @@ function powerPickItem(item, index) {
   return `<article class="power-pick" data-match="${escapeHtml(item.match.id)}"><span class="radar-rank">${String(index + 1).padStart(2, '0')}</span><div><strong>${escapeHtml(item.match.home.name)} — ${escapeHtml(item.match.away.name)}</strong><small>${escapeHtml(signal.label)} · qualità ${item.analysis.engine.quality}/100</small></div><b>${signal.probability}<small>%</small></b></article>`;
 }
 
+function competitionPulse(matches) {
+  const counts = new Map();
+  matches.forEach(match => counts.set(match.league.label, (counts.get(match.league.label) || 0) + 1));
+  return [...counts.entries()].sort((a, b) => b[1] - a[1])[0] || ['Calendario globale', 0];
+}
+
+function broadcastFixture(match) {
+  const status = statusMarkup(match);
+  return `<button class="broadcast-fixture" data-match="${escapeHtml(match.id)}"><span class="broadcast-league"><i style="--league:${escapeHtml(match.league.accent || '#758bff')}"></i>${escapeHtml(match.league.label)}</span><div>${teamLogo(match.home, 'broadcast-logo')}<strong>${escapeHtml(match.home.abbreviation || match.home.name.slice(0, 3))}</strong><b>${match.state === 'pre' ? escapeHtml(fmtTime.format(new Date(match.date))) : escapeHtml(status.main)}</b><strong>${escapeHtml(match.away.abbreviation || match.away.name.slice(0, 3))}</strong>${teamLogo(match.away, 'broadcast-logo')}</div><small>${escapeHtml(match.insight.label)} · indice ${match.opportunity}</small></button>`;
+}
+
 function renderDashboard() {
   const upcoming = filteredDashboardMatches();
   const radar = radarMatches(6);
-  const todayFeatured = state.matches.filter(match => isUpcoming(match) && localDateKey(match.date) === state.today).sort((a, b) => b.opportunity - a.opportunity);
+  const todayItems = state.matches.filter(match => localDateKey(match.date) === state.today);
+  const todayFeatured = todayItems.filter(isUpcoming).sort((a, b) => b.opportunity - a.opportunity);
   const featured = todayFeatured[0] || radar[0] || upcoming[0];
-  const live = state.matches.filter(match => match.state === 'in').length;
-  const todayMatches = state.matches.filter(match => localDateKey(match.date) === state.today).length;
-  const in48h = state.matches.filter(match => {
-    const hours = (new Date(match.date).getTime() - Date.now()) / 3600000;
-    return hours >= 0 && hours <= 48;
-  }).length;
+  const liveMatches = state.matches.filter(match => match.state === 'in');
+  const in48h = state.matches.filter(match => { const hours = (new Date(match.date).getTime() - Date.now()) / 3600000; return hours >= 0 && hours <= 48; });
   const coveredCompetitions = state.coverage.competitions || new Set(state.matches.map(match => match.league.id)).size;
-  return `<div class="view dashboard-view">
+  const [busyLeague, busyCount] = competitionPulse(todayItems);
+  const strongest = state.powerPicks[0];
+  const ticker = [...liveMatches, ...upcoming.filter(match => match.state !== 'in')].slice(0, 7);
+  const romeDateLabel = fmtLongDay.format(new Date(`${state.today}T12:00:00Z`));
+  return `<div class="view dashboard-view v4-dashboard">
     ${renderHero(featured)}
-    <section class="metric-grid" aria-label="Indicatori principali">
-      ${metric('ball', live, 'Partite live', 'red')}
-      ${metric('clock', todayMatches, 'Partite disponibili oggi', 'accent')}
-      ${metric('radar', in48h, 'Nelle prossime 48h', 'blue')}
-      ${metric('shield', coveredCompetitions, 'Competizioni coperte', '')}
+    <section class="daily-briefing">
+      <header><div><span class="broadcast-label"><i></i>DAILY BRIEFING</span><h2>${escapeHtml(romeDateLabel)}</h2></div><span class="briefing-sync">Europe/Rome · aggiornamento automatico</span></header>
+      <div class="briefing-grid">
+        <article class="briefing-card live-brief"><span>LIVE PULSE</span><strong>${liveMatches.length ? `${liveMatches.length} ${liveMatches.length === 1 ? 'partita in campo' : 'partite in campo'}` : 'Nessun live adesso'}</strong><p>${liveMatches.length ? `${liveMatches[0].home.name}–${liveMatches[0].away.name} guida il flusso live.` : `Il prossimo aggiornamento ricontrolla risultati e stati tra meno di 90 secondi.`}</p></article>
+        <article class="briefing-card"><span>AGENDA</span><strong>${todayItems.length} oggi · ${in48h.length} entro 48h</strong><p>${busyCount ? `${busyLeague} è la competizione più presente oggi con ${busyCount} incontri.` : 'Il calendario si amplia quando le fonti pubblicano nuovi eventi.'}</p></article>
+        <article class="briefing-card intelligence-brief"><span>INTELLIGENCE SIGNAL</span><strong>${strongest?.analysis?.signals?.[0] ? `${strongest.analysis.signals[0].label} · ${strongest.analysis.signals[0].probability}%` : featured ? featured.insight.label : 'Analisi in preparazione'}</strong><p>${strongest ? `${strongest.match.home.name}–${strongest.match.away.name}, qualità dati ${strongest.analysis.engine.quality}/100.` : 'Il Power Model sta selezionando le partite con il campione più leggibile.'}</p></article>
+        <article class="briefing-card coverage-brief"><span>COVERAGE DESK</span><strong>${coveredCompetitions} competizioni monitorate</strong><p>Calendario globale, feed gratuiti e controlli di qualità senza abbonamenti.</p></article>
+      </div>
     </section>
-    <div class="dashboard-grid">
-      <section class="section-card matches-card">
-        <header class="section-head"><div><h2>Oggi sul campo</h2><p>${todayMatches} partite oggi · poi i prossimi appuntamenti</p></div><button class="section-link" data-view="matches">Calendario ${icon('chevron')}</button></header>
+    ${ticker.length ? `<section class="broadcast-strip"><header><span>ON AIR</span><div></div><small>Scorri il matchday</small></header><div class="broadcast-track">${ticker.map(broadcastFixture).join('')}</div></section>` : ''}
+    <div class="dashboard-grid editorial-dashboard-grid">
+      <section class="section-card matches-card command-card">
+        <header class="section-head"><div><span class="section-code">MATCHDAY CONTROL</span><h2>Oggi sul campo</h2><p>${todayItems.length} partite oggi · poi i prossimi appuntamenti</p></div><button class="section-link" data-view="matches">Apri regia ${icon('chevron')}</button></header>
         ${leagueFilters(state.dashboardLeague, 'dashboard-league')}
         ${state.errors.matches && !state.matches.length ? errorBlock(state.errors.matches, true) : (upcoming.length ? `<div class="match-list">${upcoming.slice(0, 7).map(matchRow).join('')}</div>` : emptyInline('Nessuna partita nel periodo selezionato'))}
       </section>
-      <section class="section-card radar-card">
-        <header class="section-head"><div><h2>Power Picks</h2><p>Segnali calcolati su dati profondi</p></div><button class="section-link" data-view="radar">Radar ${icon('chevron')}</button></header>
+      <section class="section-card radar-card signal-card">
+        <header class="section-head"><div><span class="section-code">SIGNAL DESK</span><h2>Power Picks</h2><p>Priorità, robustezza e rischio prima del pronostico</p></div><button class="section-link" data-view="radar">Apri studio ${icon('chevron')}</button></header>
         <div class="radar-list">${state.powerPicks.length ? state.powerPicks.map(powerPickItem).join('') : state.powerLoading ? `<div class="power-picks-loading"><i></i><i></i><i></i></div>` : (radar.length ? radar.slice(0, 5).map((match, index) => radarItem(match, index)).join('') : emptyInline('In attesa delle prossime partite'))}</div>
-        <div class="radar-disclaimer">${icon('info')}<span>Le percentuali sono stime del modello sui dati disponibili, non garanzie. Apri una partita per verificare campione e rischio.</span></div>
+        <div class="radar-disclaimer">${icon('info')}<span>Priorità non significa certezza: apri il dossier per controllare contesto, formazione e qualità del campione.</span></div>
       </section>
     </div>
-    <section class="news-section">
-      <header class="plain-section-head"><div><h2>Ultime dal calcio</h2><p>Notizie aggregate dalle fonti disponibili</p></div><button class="section-link" data-view="news">Tutte le notizie ${icon('arrow')}</button></header>
+    <section class="news-section dashboard-newsroom">
+      <header class="plain-section-head"><div><span class="section-code">NEWSROOM</span><h2>La prima pagina del calcio</h2><p>Gerarchia editoriale, fonte visibile e accesso all’articolo originale</p></div><button class="section-link" data-view="news">Entra in redazione ${icon('arrow')}</button></header>
       ${state.errors.news && !state.news.length ? errorBlock(state.errors.news, true) : `<div class="news-row">${state.news.slice(0, 3).map(newsCard).join('')}</div>`}
     </section>
   </div>`;
@@ -465,30 +486,71 @@ function renderMatchesView() {
   const groups = Object.groupBy ? Object.groupBy(matches, match => localDateKey(match.date)) : matches.reduce((acc, match) => ((acc[localDateKey(match.date)] ||= []).push(match), acc), {});
   const availableLeagues = [...new Map([...state.leagues, ...state.matches.map(match => match.league)].map(league => [league.id, league])).values()].sort((a, b) => a.label.localeCompare(b.label, 'it'));
   const leagueOptions = [`<option value="all">Tutte le competizioni</option>`, ...availableLeagues.map(league => `<option value="${league.id}" ${state.matchLeague === league.id ? 'selected' : ''}>${escapeHtml(league.label)}</option>`)].join('');
-  return `<div class="view matches-view">
-    ${viewHeader('CALENDARIO', 'Tutte le partite', 'Live score, orari italiani e calendario dei principali campionati europei.', `<button class="button" id="viewRefresh">${icon('refresh')} Aggiorna</button>`)}
-    <section class="controls-card"><div class="date-strip"><button class="date-button ${state.selectedDate === 'all' ? 'active' : ''}" data-date="all"><span>Vista</span><strong>Tutte</strong></button>${dates.map(date => `<button class="date-button ${state.selectedDate === date ? 'active' : ''}" data-date="${date}"><span>${escapeHtml(new Intl.DateTimeFormat('it-IT', { timeZone: 'Europe/Rome', weekday: 'short' }).format(new Date(`${date}T12:00:00Z`)))}</span><strong>${date.slice(8)}</strong></button>`).join('')}</div><select class="select-control" id="matchLeagueSelect" aria-label="Filtra competizione">${leagueOptions}</select></section>
-    ${state.errors.matches && !state.matches.length ? errorBlock(state.errors.matches) : (matches.length ? Object.entries(groups).map(([date, items]) => `<section class="day-group"><header class="day-heading"><strong>${escapeHtml(date === state.today ? `Oggi · ${displayDate(`${date}T12:00:00Z`, true)}` : displayDate(`${date}T12:00:00Z`, true))}</strong><span>${items.length} ${items.length === 1 ? 'partita' : 'partite'}</span></header><div class="match-list">${items.map(matchRow).join('')}</div></section>`).join('') : emptyState('ball', 'Nessuna partita trovata', 'Prova una data o una competizione diversa. Il calendario si aggiorna automaticamente quando le fonti pubblicano nuovi incontri.'))}
+  const live = matches.filter(match => match.state === 'in');
+  const next = matches.find(match => match.state === 'pre');
+  const uniqueCompetitions = new Set(matches.map(match => match.league.id)).size;
+  const [busyLeague, busyCount] = competitionPulse(matches);
+  return `<div class="view matches-view v4-matchday">
+    ${viewHeader('MATCHDAY COMMAND', 'Tutte le partite', 'Una regia temporale: live, prossimi calci d’inizio, densità del programma e accesso immediato ai dossier.', `<button class="button" id="viewRefresh">${icon('refresh')} Sincronizza</button>`)}
+    <section class="matchday-console">
+      <article class="console-clock"><span>ORA UFFICIALE</span><strong>${escapeHtml(fmtTime.format(new Date()))}</strong><small>Europe/Rome</small></article>
+      <article class="console-live ${live.length ? 'is-live' : ''}"><span><i></i>LIVE CONTROL</span><strong>${live.length ? `${live.length} in campo` : 'Stand-by'}</strong><small>${live[0] ? `${live[0].home.name}–${live[0].away.name}` : 'Nessun incontro live nel filtro'}</small></article>
+      <article class="console-next"><span>PROSSIMO KICK-OFF</span>${next ? `<div>${teamLogo(next.home, 'console-logo')}<strong>${escapeHtml(next.home.name)}<i>vs</i>${escapeHtml(next.away.name)}</strong>${teamLogo(next.away, 'console-logo')}</div><small>${escapeHtml(displayDate(next.date))} · ${escapeHtml(fmtTime.format(new Date(next.date)))}</small>` : '<strong>Nessun evento</strong>'}</article>
+      <article class="console-density"><span>PROGRAMMA</span><strong>${matches.length} gare · ${uniqueCompetitions} tornei</strong><small>${busyCount ? `${escapeHtml(busyLeague)} guida con ${busyCount}` : 'Filtro senza eventi'}</small></article>
+    </section>
+    <section class="controls-card command-controls"><div class="date-strip"><button class="date-button ${state.selectedDate === 'all' ? 'active' : ''}" data-date="all"><span>Regia</span><strong>Tutte</strong></button>${dates.map(date => `<button class="date-button ${state.selectedDate === date ? 'active' : ''}" data-date="${date}"><span>${escapeHtml(new Intl.DateTimeFormat('it-IT', { timeZone: 'Europe/Rome', weekday: 'short' }).format(new Date(`${date}T12:00:00Z`)))}</span><strong>${date.slice(8)}</strong><i>${state.matches.filter(match => localDateKey(match.date) === date).length}</i></button>`).join('')}</div><select class="select-control" id="matchLeagueSelect" aria-label="Filtra competizione">${leagueOptions}</select></section>
+    ${state.errors.matches && !state.matches.length ? errorBlock(state.errors.matches) : (matches.length ? `<div class="matchday-days">${Object.entries(groups).map(([date, items], dayIndex) => { const liveDay = items.filter(item => item.state === 'in').length; const dayCompetitions = new Set(items.map(item => item.league.id)).size; return `<section class="day-group command-day"><header class="day-heading"><div><span>${String(dayIndex + 1).padStart(2, '0')}</span><strong>${escapeHtml(date === state.today ? `Oggi · ${displayDate(`${date}T12:00:00Z`, true)}` : displayDate(`${date}T12:00:00Z`, true))}</strong></div><p>${liveDay ? `<b>${liveDay} LIVE</b>` : ''}<span>${items.length} gare · ${dayCompetitions} competizioni</span></p></header><div class="match-list">${items.map(matchRow).join('')}</div></section>`; }).join('')}</div>` : emptyState('ball', 'Nessuna partita trovata', 'Prova una data o una competizione diversa. Il calendario si aggiorna automaticamente quando le fonti pubblicano nuovi incontri.'))}
   </div>`;
+}
+
+function radarSpotlight(match, index) {
+  const analysis = state.analyses[`${match.league.id}:${match.id}`];
+  const signal = analysis?.signals?.[0];
+  const labels = ['PRIORITÀ DEL GIORNO', 'SECONDA LETTURA', 'OUTSIDER DA STUDIARE'];
+  return `<article class="radar-spotlight rank-${index + 1}" data-match="${escapeHtml(match.id)}"><header><span>${labels[index]}</span><b>${String(index + 1).padStart(2, '0')}</b></header><div class="radar-spotlight-teams"><div>${teamLogo(match.home, 'spotlight-logo')}<strong>${escapeHtml(match.home.name)}</strong></div><i>—</i><div>${teamLogo(match.away, 'spotlight-logo')}<strong>${escapeHtml(match.away.name)}</strong></div></div><div class="spotlight-signal"><span>${signal ? escapeHtml(signal.label) : escapeHtml(match.insight.label)}</span><strong>${signal ? signal.probability : match.opportunity}<small>${signal ? '%' : '/100'}</small></strong></div><footer><span>${escapeHtml(match.league.label)}</span><span>${escapeHtml(displayDate(match.date))} · ${escapeHtml(fmtTime.format(new Date(match.date)))}</span><span>Rischio ${escapeHtml(analysis?.assessment?.risk || match.insight.risk)}</span></footer></article>`;
 }
 
 function renderRadarView() {
   const matches = radarMatches(30);
-  return `<div class="view radar-view">
-    ${viewHeader('MATCH INTELLIGENCE', 'Match Radar', 'Le partite più interessanti, lette attraverso probabilità, contesto reale, tattica, calendario e qualità dei dati.')}
-    <section class="radar-hero"><div><h2>Dal calendario a una lettura completa.</h2><p>L’indice ordina gli incontri da analizzare. Aprendo ogni partita il Power Model calcola 1-X-2, gol attesi, Over/Under, Goal/No Goal, segnali protetti, precedenti e rischio. Il risultato resta informativo e non garantisce alcun esito.</p></div><div class="radar-hero-visual">${icon('radar')}</div></section>
-    ${matches.length ? `<section class="radar-table"><header class="radar-table-head"><span>#</span><span>Partita</span><span>Lettura</span><span>Rischio</span><span>Indice</span><span></span></header>${matches.map((match, index) => `<article class="radar-table-row" data-match="${escapeHtml(match.id)}"><span class="radar-position">${index + 1}</span><div class="radar-match-main"><strong>${escapeHtml(match.home.name)} — ${escapeHtml(match.away.name)}</strong><span>${escapeHtml(match.league.label)} · ${escapeHtml(displayDate(match.date))} · ${escapeHtml(fmtTime.format(new Date(match.date)))}</span></div><span class="insight-badge">${escapeHtml(match.insight.label)}</span><span class="risk-badge ${match.insight.risk === 'Alto' ? 'high' : match.insight.risk === 'Basso' ? 'low' : ''}"><i></i>${escapeHtml(match.insight.risk)}</span><span class="radar-value">${match.opportunity}<small>/100</small></span>${icon('chevron')}</article>`).join('')}</section>` : emptyState('radar', 'Radar in attesa', 'Nessun incontro futuro disponibile nel periodo monitorato.')}
+  const podium = matches.slice(0, 3);
+  const highIndex = matches.filter(match => match.opportunity >= 75).length;
+  const lowRisk = matches.filter(match => match.insight.risk === 'Basso').length;
+  const analysesReady = matches.filter(match => state.analyses[`${match.league.id}:${match.id}`]).length;
+  return `<div class="view radar-view v4-radar">
+    ${viewHeader('SIGNAL STUDIO', 'Match Radar', 'Non una lista di pronostici: una sala di selezione che separa interesse, robustezza del campione e rischio contestuale.')}
+    <section class="radar-studio-hero"><div><span class="broadcast-label"><i></i>MODEL ROOM</span><h2>Prima scegli cosa merita attenzione.<br><em>Poi verifica perché.</em></h2><p>Il Radar ordina il calendario; il dossier Intelligence controlla aggregato, riposo, stili, formazioni e red flags. Un indice alto senza contesto non basta.</p></div><div class="studio-orbit"><span><b>${matches.length}</b>gare lette</span><span><b>${highIndex}</b>indice 75+</span><span><b>${analysesReady}</b>dossier pronti</span></div></section>
+    ${podium.length ? `<section class="radar-podium">${podium.map(radarSpotlight).join('')}</section>` : ''}
+    <section class="signal-ledger"><article><span>SEGNALE FORTE</span><strong>${highIndex}</strong><p>Indice preliminare almeno 75/100</p></article><article><span>RISCHIO BASSO</span><strong>${lowRisk}</strong><p>Profilo base meno volatile</p></article><article><span>CONTROLLO NECESSARIO</span><strong>${Math.max(0, matches.length - analysesReady)}</strong><p>Dossier profondo non ancora aperto</p></article><article class="ledger-rule">${icon('shield')}<div><strong>Regola VANTAGGIO</strong><p>Mai confondere probabilità alta con certezza. Il contesto può cambiare il valore della singola gara.</p></div></article></section>
+    ${matches.length ? `<section class="radar-table studio-table"><header class="section-head"><div><span class="section-code">RANKING COMPLETO</span><h2>Tavolo di selezione</h2><p>Tutte le partite ordinate per interesse analitico</p></div></header><header class="radar-table-head"><span>#</span><span>Partita</span><span>Lettura</span><span>Rischio</span><span>Indice</span><span></span></header>${matches.map((match, index) => `<article class="radar-table-row" data-match="${escapeHtml(match.id)}"><span class="radar-position">${index + 1}</span><div class="radar-match-main"><strong>${escapeHtml(match.home.name)} — ${escapeHtml(match.away.name)}</strong><span>${escapeHtml(match.league.label)} · ${escapeHtml(displayDate(match.date))} · ${escapeHtml(fmtTime.format(new Date(match.date)))}</span></div><span class="insight-badge">${escapeHtml(match.insight.label)}</span><span class="risk-badge ${match.insight.risk === 'Alto' ? 'high' : match.insight.risk === 'Basso' ? 'low' : ''}"><i></i>${escapeHtml(match.insight.risk)}</span><span class="radar-value">${match.opportunity}<small>/100</small></span>${icon('chevron')}</article>`).join('')}</section>` : emptyState('radar', 'Radar in attesa', 'Nessun incontro futuro disponibile nel periodo monitorato.')}
   </div>`;
+}
+
+function newsTopic(article) {
+  const text = `${article.title} ${article.description || ''}`.toLowerCase();
+  if (/mercato|transfer|acquist|cessione|firma|contratto/.test(text)) return 'Mercato';
+  if (/infortun|assen|squalif|recuper|rientr/.test(text)) return 'Disponibilità';
+  if (/champions|europa league|conference|uefa/.test(text)) return 'Coppe europee';
+  if (/nazionale|mondial|europeo|fifa/.test(text)) return 'Nazionali';
+  if (/intervista|dichiar|conferenza|allenatore/.test(text)) return 'Voci dal campo';
+  return 'Calcio';
+}
+
+function newsroomSideStory(article, index) {
+  return `<article class="newsroom-side-story" data-news-url="${safeUrl(article.link)}" tabindex="0"><span>${String(index + 2).padStart(2, '0')} · ${escapeHtml(newsTopic(article))}</span><h3>${escapeHtml(article.title)}</h3><footer><b>${escapeHtml(article.source)}</b><small>${article.published ? escapeHtml(displayNewsDate(article.published)) : 'Ora'}</small>${icon('arrow')}</footer></article>`;
 }
 
 function renderNewsView() {
   const sources = [...new Set(state.news.map(article => article.source))];
   const articles = state.newsSource === 'all' ? state.news : state.news.filter(article => article.source === state.newsSource);
   const updated = state.dataMeta.news?.fetchedAt;
-  return `<div class="view news-view">
-    ${viewHeader('EDITORIA', 'Notizie', 'Il meglio dell’informazione calcistica aggregato da fonti gratuite e consultabile alla fonte originale.', `<button class="button" id="viewRefresh">${icon('refresh')} Aggiorna</button>`)}
-    <section class="news-toolbar"><div class="filter-row"><button class="filter-chip ${state.newsSource === 'all' ? 'active' : ''}" data-news-source="all">Tutte</button>${sources.map(source => `<button class="filter-chip ${state.newsSource === source ? 'active' : ''}" data-news-source="${escapeHtml(source)}">${escapeHtml(source)}</button>`).join('')}</div><span class="news-updated">${updated ? `Aggiornate ${escapeHtml(relativeTime(updated))}` : ''}</span></section>
-    ${state.errors.news && !state.news.length ? errorBlock(state.errors.news) : (articles.length ? `<section class="news-grid">${articles.map(newsCard).join('')}</section>` : emptyState('news', 'Nessuna notizia', 'Non ci sono articoli per questa fonte. Seleziona “Tutte”.'))}
+  const lead = articles[0];
+  const leadImage = lead ? safeUrl(lead.image) : '';
+  const sourceCounts = sources.map(source => ({ source, count: state.news.filter(article => article.source === source).length }));
+  return `<div class="view news-view v4-newsroom">
+    ${viewHeader('VANTAGGIO NEWSROOM', 'Notizie', 'Una prima pagina viva: gerarchia editoriale, temi riconoscibili, data e fonte sempre in evidenza.', `<button class="button" id="viewRefresh">${icon('refresh')} Aggiorna redazione</button>`)}
+    <section class="newsroom-status"><div><span class="broadcast-label"><i></i>NEWS DESK LIVE</span><strong>${articles.length} articoli disponibili</strong></div><div class="source-ticker">${sourceCounts.map(item => `<span><b>${item.count}</b>${escapeHtml(item.source)}</span>`).join('')}</div><small>${updated ? `Ultimo desk ${escapeHtml(relativeTime(updated))}` : 'Sincronizzazione in corso'}</small></section>
+    <section class="news-toolbar editorial-toolbar"><div class="filter-row"><button class="filter-chip ${state.newsSource === 'all' ? 'active' : ''}" data-news-source="all">Prima pagina</button>${sources.map(source => `<button class="filter-chip ${state.newsSource === source ? 'active' : ''}" data-news-source="${escapeHtml(source)}">${escapeHtml(source)}</button>`).join('')}</div></section>
+    ${state.errors.news && !state.news.length ? errorBlock(state.errors.news) : (articles.length ? `<section class="front-page"><article class="lead-story ${leadImage ? 'has-image' : ''}" data-news-url="${safeUrl(lead.link)}" tabindex="0"${leadImage ? ` style="--lead-image:url('${leadImage.replaceAll("'", '%27')}')"` : ''}><div class="lead-story-shade"></div><div class="lead-story-content"><span>${escapeHtml(newsTopic(lead))} · APERTURA</span><h2>${escapeHtml(lead.title)}</h2>${lead.description ? `<p>${escapeHtml(lead.description)}</p>` : ''}<footer><b>${escapeHtml(lead.source)}</b><small>${lead.published ? escapeHtml(displayNewsDate(lead.published)) : 'Ultimo aggiornamento'}</small><i>Leggi alla fonte ${icon('external')}</i></footer></div></article><div class="front-page-side">${articles.slice(1, 4).map(newsroomSideStory).join('') || '<div class="intel-empty">Altri titoli in arrivo.</div>'}</div></section><section class="news-archive"><header class="plain-section-head"><div><span class="section-code">ULTIME EDIZIONI</span><h2>Il resto del flusso</h2><p>Ogni scheda apre direttamente la fonte originale</p></div></header><div class="news-grid">${articles.slice(4).map(newsCard).join('') || articles.slice(1).map(newsCard).join('')}</div></section>` : emptyState('news', 'Nessuna notizia', 'Non ci sono articoli per questa fonte. Seleziona “Prima pagina”.'))}
   </div>`;
 }
 
@@ -500,15 +562,42 @@ function renderStandingsView() {
   if (!data && state.errors.standings) content = errorBlock(state.errors.standings);
   else if (!data) content = `<section class="standings-card"><div class="skeleton sk-list"></div></section>`;
   else if (!data.table?.length) content = emptyState('table', 'Classifica non ancora disponibile', 'La nuova stagione potrebbe non essere iniziata. La tabella apparirà appena pubblicata dalla fonte.');
-  else content = `<div class="standings-layout"><section class="standings-card"><div class="table-scroll"><table class="standings-table"><thead><tr><th>#</th><th>Squadra</th><th>PG</th><th>V</th><th>P</th><th>S</th><th>GF</th><th>GS</th><th>DR</th><th>PT</th></tr></thead><tbody>${data.table.map((row, index) => `<tr class="${index < 4 ? 'zone-ucl' : index >= data.table.length - 3 ? 'zone-drop' : ''}"><td>${row.rank}</td><td class="standings-team">${teamLogo({ ...row.team, abbreviation: row.team.name.slice(0, 3) })}<strong>${escapeHtml(row.team.name)}</strong></td><td>${row.played}</td><td>${row.wins}</td><td>${row.draws}</td><td>${row.losses}</td><td>${row.goalsFor}</td><td>${row.goalsAgainst}</td><td>${row.difference > 0 ? '+' : ''}${row.difference}</td><td class="points">${row.points}</td></tr>`).join('')}</tbody></table></div></section><aside class="legend-card"><h3>Legenda</h3><div class="legend-item"><i></i>Zona competizioni europee</div><div class="legend-item"><i class="red"></i>Zona retrocessione</div><div class="legend-note">Posizioni evidenziate a scopo visivo. I criteri ufficiali possono cambiare in base alla competizione e alla stagione.</div></aside></div>`;
-  return `<div class="view standings-view">${viewHeader('CAMPIONATI', 'Classifiche', 'Posizioni, rendimento e differenza reti delle principali competizioni.', actions)}${content}</div>`;
+  else {
+    const table = data.table;
+    const leader = table[0];
+    const second = table[1];
+    const bestAttack = [...table].sort((a, b) => b.goalsFor - a.goalsFor)[0];
+    const bestDefense = [...table].filter(row => row.played > 0).sort((a, b) => a.goalsAgainst - b.goalsAgainst)[0] || table[0];
+    const titleGap = second ? leader.points - second.points : 0;
+    const games = table.reduce((sum, row) => sum + row.played, 0) / 2;
+    const goals = table.reduce((sum, row) => sum + row.goalsFor, 0);
+    const goalsPerGame = games ? Math.round((goals / games) * 10) / 10 : 0;
+    const sixth = table[Math.min(5, table.length - 1)];
+    const spread = sixth ? leader.points - sixth.points : 0;
+    const started = leader.played > 0;
+    content = `<section class="league-pulse"><header><div><span class="broadcast-label"><i></i>LEAGUE PULSE</span><h2>${escapeHtml(data.league.label)}</h2><p>${escapeHtml(data.season || 'Stagione corrente')}</p></div><strong>${started ? `${leader.played} giornate lette` : 'Pre-season'}</strong></header><div class="league-pulse-grid"><article class="leader-pulse">${teamLogo({ ...leader.team, abbreviation: leader.team.name.slice(0, 3) }, 'pulse-logo')}<div><span>CAPOLISTA</span><strong>${escapeHtml(leader.team.name)}</strong><small>${leader.points} punti · ${titleGap ? `+${titleGap} sulla seconda` : 'classifica serrata'}</small></div></article><article><span>MIGLIOR ATTACCO</span><strong>${escapeHtml(bestAttack.team.name)}</strong><small>${bestAttack.goalsFor} gol segnati</small></article><article><span>MIGLIOR DIFESA</span><strong>${escapeHtml(bestDefense.team.name)}</strong><small>${bestDefense.goalsAgainst} gol subiti</small></article><article><span>RITMO DEL TORNEO</span><strong>${goalsPerGame}</strong><small>gol per partita disputata</small></article></div></section><div class="standings-layout intelligence-table-layout"><section class="standings-card"><header class="table-broadcast-head"><span>CLASSIFICA LIVE</span><small>PG partite · DR differenza reti · PPG punti per gara</small></header><div class="table-scroll"><table class="standings-table"><thead><tr><th>#</th><th>Squadra</th><th>PG</th><th>V</th><th>P</th><th>S</th><th>GF</th><th>GS</th><th>DR</th><th>PPG</th><th>PT</th></tr></thead><tbody>${table.map((row, index) => `<tr class="${index < 4 ? 'zone-ucl' : index >= table.length - 3 ? 'zone-drop' : ''}"><td><span class="rank-cell">${row.rank}</span></td><td class="standings-team">${teamLogo({ ...row.team, abbreviation: row.team.name.slice(0, 3) })}<strong>${escapeHtml(row.team.name)}</strong></td><td>${row.played}</td><td>${row.wins}</td><td>${row.draws}</td><td>${row.losses}</td><td>${row.goalsFor}</td><td>${row.goalsAgainst}</td><td>${row.difference > 0 ? '+' : ''}${row.difference}</td><td>${row.played ? (row.points / row.played).toFixed(2) : '–'}</td><td class="points">${row.points}</td></tr>`).join('')}</tbody></table></div></section><aside class="league-intelligence"><span class="section-code">TABLE INTELLIGENCE</span><h3>Come leggere la corsa</h3><div class="league-reading"><span>Distacco 1ª–6ª</span><strong>${spread} pt</strong><p>${spread <= 5 ? 'La parte alta è ancora molto compatta.' : 'La vetta sta creando una separazione visibile.'}</p></div><div class="league-reading"><span>Zona alta</span><strong>${table.slice(0, 4).map(row => row.team.name).join(' · ')}</strong></div><div class="zone-legend"><p><i></i>Fascia europea indicativa</p><p><i class="red"></i>Fascia retrocessione indicativa</p></div><div class="legend-note">Le fasce sono un aiuto visivo: criteri ufficiali, playoff e posti europei dipendono dalla competizione.</div></aside></div>`;
+  }
+  return `<div class="view standings-view v4-standings">${viewHeader('TABLE LAB', 'Classifiche', 'Non solo posizioni: leadership, ritmo realizzativo, equilibrio della corsa e rendimento per gara.', actions)}${content}</div>`;
+}
+
+function countdownText(match) {
+  if (match.state === 'in') return 'IN CAMPO';
+  if (match.state === 'post') return 'TERMINATA';
+  const minutes = Math.max(0, Math.round((new Date(match.date).getTime() - Date.now()) / 60000));
+  if (minutes < 60) return `TRA ${minutes} MIN`;
+  if (minutes < 1440) return `TRA ${Math.floor(minutes / 60)}H ${minutes % 60}M`;
+  return `TRA ${Math.floor(minutes / 1440)} GIORNI`;
 }
 
 function renderFavoritesView() {
   const matches = [...state.favorites].map(id => state.matches.find(match => match.id === id) || state.favoriteSnapshots[id]).filter(Boolean).sort((a, b) => new Date(a.date) - new Date(b.date));
-  return `<div class="view favorites-view">
-    ${viewHeader('LA TUA WATCHLIST', 'Preferiti', 'Salvati solo su questo dispositivo, senza account e senza raccogliere dati personali.')}
-    ${matches.length ? `<section class="section-card"><header class="section-head"><div><h2>Partite salvate</h2><p>${matches.length} ${matches.length === 1 ? 'incontro' : 'incontri'} nella watchlist</p></div></header><div class="match-list">${matches.map(matchRow).join('')}</div></section>` : emptyState('star', 'Nessun preferito', 'Tocca la stella accanto a una partita per aggiungerla qui e ritrovarla rapidamente.', '<button class="button primary" data-view="matches">Scopri le partite</button>')}
+  const next = matches.find(match => match.state !== 'post') || matches[0];
+  const live = matches.filter(match => match.state === 'in').length;
+  const analysed = matches.filter(match => state.analyses[`${match.league.id}:${match.id}`]).length;
+  const competitions = new Set(matches.map(match => match.league.id)).size;
+  return `<div class="view favorites-view v4-watchroom">
+    ${viewHeader('MY MATCHROOM', 'Preferiti', 'La tua sala personale: prossimi appuntamenti, dossier già aperti e alert locali senza account.')}
+    ${matches.length ? `<section class="watchroom-hero"><div class="watchroom-copy"><span class="broadcast-label"><i></i>PRIVATE WATCHLIST</span><h2>La tua agenda.<br><em>Senza rumore.</em></h2><p>${matches.length} partite salvate in ${competitions} competizioni. Tutto resta esclusivamente su questo dispositivo.</p><div class="watchroom-kpis"><span><b>${live}</b>live</span><span><b>${analysed}</b>dossier aperti</span><span><b>${state.alertsEnabled ? 'ON' : 'OFF'}</b>alert</span></div></div>${next ? `<button class="next-watch" data-match="${escapeHtml(next.id)}"><header><span>NEXT ON YOUR RADAR</span><b>${escapeHtml(countdownText(next))}</b></header><div><span>${teamLogo(next.home, 'watch-logo')}<strong>${escapeHtml(next.home.name)}</strong></span><i>VS</i><span>${teamLogo(next.away, 'watch-logo')}<strong>${escapeHtml(next.away.name)}</strong></span></div><footer>${escapeHtml(next.league.label)} · ${escapeHtml(displayDate(next.date))} · ${escapeHtml(fmtTime.format(new Date(next.date)))}</footer></button>` : ''}</section><div class="watchroom-layout"><section class="section-card watchlist-card"><header class="section-head"><div><span class="section-code">SAVED FIXTURES</span><h2>Partite sotto osservazione</h2><p>Apri una riga per aggiornare il dossier completo</p></div></header><div class="match-list">${matches.map(matchRow).join('')}</div></section><aside class="watchroom-assistant"><span class="section-code">WATCH ASSISTANT</span><h3>Stato della stanza</h3><article>${icon('bell')}<div><strong>${state.alertsEnabled ? 'Alert locali attivi' : 'Alert locali disattivati'}</strong><p>${state.alertsEnabled ? 'Riceverai un avviso all’inizio delle partite salvate mentre il sito è aperto.' : 'Attivali dalla campanella in alto per seguire i cambi di stato.'}</p></div></article><article>${icon('radar')}<div><strong>${analysed}/${matches.length} dossier consultati</strong><p>Le analisi vengono ricalcolate quando apri la partita e rispettano la cache dati.</p></div></article><article>${icon('shield')}<div><strong>Privacy reale</strong><p>Nessun profilo, cookie pubblicitario o sincronizzazione esterna della watchlist.</p></div></article></aside></div>` : emptyState('star', 'La Matchroom è vuota', 'Tocca la stella accanto a una partita: qui nascerà una watchlist personale con countdown, dossier e alert.', '<button class="button primary" data-view="matches">Costruisci la Matchroom</button>')}
   </div>`;
 }
 
@@ -663,7 +752,7 @@ function renderIntelligence(data) {
   const aggregate = context.aggregate;
   const aggregateMarkup = aggregate ? `<div class="aggregate-board"><span>${teamLogo(home, 'aggregate-logo')}<b>${aggregate.home}</b></span><i>AGGREGATO</i><span><b>${aggregate.away}</b>${teamLogo(away, 'aggregate-logo')}</span></div>` : '';
   const tournamentMarkup = (data.tournamentStats || []).length ? `<div class="tournament-intel"><span class="section-overline">NUMERI NEL TORNEO</span><div>${data.tournamentStats.map(team => `<article>${teamLogo(team, 'intel-team-logo')}<strong>${escapeHtml(team.name)}</strong><span><b>${team.goals ?? '–'}</b>gol</span><span><b>${team.conceded ?? '–'}</b>subiti</span><span><b>${team.goalDifference == null ? '–' : team.goalDifference > 0 ? `+${team.goalDifference}` : team.goalDifference}</b>diff.</span></article>`).join('')}</div></div>` : '';
-  const newsMarkup = (data.news?.articles || []).length ? data.news.articles.map(article => `<article class="intel-news" data-news-url="${safeUrl(article.link)}" tabindex="0"><header><span>${escapeHtml(article.tag)}</span><em class="${escapeHtml(article.reliability || 'da_verificare')}">${article.reliability === 'forte' ? 'Fonte forte' : article.reliability === 'media' ? 'Fonte nota' : 'Da verificare'}</em></header><h5>${escapeHtml(article.title)}</h5><div><b>${escapeHtml(article.publisher)}</b><small>${article.published ? escapeHtml(fmtNewsDate.format(new Date(article.published))) : ''}</small>${icon('external')}</div></article>`).join('') : `<div class="intel-empty">Nessun articolo chiaramente collegato trovato nelle fonti indicizzate.</div>`;
+  const newsMarkup = (data.news?.articles || []).length ? data.news.articles.map(article => `<article class="intel-news" data-news-url="${safeUrl(article.link)}" tabindex="0"><header><span>${escapeHtml(article.tag)}</span><em class="${escapeHtml(article.reliability || 'da_verificare')}">${article.reliability === 'forte' ? 'Fonte forte' : article.reliability === 'media' ? 'Fonte nota' : 'Da verificare'}</em></header><h5>${escapeHtml(article.title)}</h5><div><b>${escapeHtml(article.publisher)}</b><small>${article.published ? escapeHtml(displayNewsDate(article.published)) : ''}</small>${icon('external')}</div></article>`).join('') : `<div class="intel-empty">Nessun articolo chiaramente collegato trovato nelle fonti indicizzate.</div>`;
   return `<section class="intelligence-room">
     <header class="intel-title"><div><span class="intel-mark">MATCH INTELLIGENCE</span><h3>Quello che i numeri non raccontano</h3></div><div class="intel-live"><i></i>CONTESTO LIVE</div></header>
     <article class="context-spotlight"><div><span>LA COSA PIÙ IMPORTANTE DA SAPERE</span><h4>${escapeHtml(context.scenario || 'Contesto partita')}</h4><p>${escapeHtml(context.facts?.[0] || data.keyQuestion)}</p>${context.venue?.name ? `<div class="intel-venue">${icon('pin')}<span>${escapeHtml(context.venue.name)}${context.venue.city ? ` · ${escapeHtml(context.venue.city)}` : ''}${context.venue.country ? `, ${escapeHtml(context.venue.country)}` : ''}</span></div>` : ''}</div>${aggregateMarkup}</article>
@@ -685,7 +774,7 @@ function openInfo() {
   const modal = $('#matchModal');
   delete modal.dataset.eventId;
   modal.style.removeProperty('--league-color');
-  modal.innerHTML = `<button class="modal-close" data-close-modal aria-label="Chiudi">${icon('x')}</button><header class="modal-hero"><span class="modal-competition"><i></i>TRASPARENZA</span><div style="position:relative;z-index:1;margin-top:24px"><h2 style="margin:0 0 8px;font-size:26px">Dati gratuiti, metodo chiaro.</h2><p style="margin:0;color:rgba(255,255,255,.65);font-size:11px;line-height:1.5">Nessun abbonamento e nessuna chiave API a pagamento.</p></div></header><div class="modal-body"><section class="analysis-box"><div class="analysis-box-head"><span>Fonti attive</span><strong>Feed pubblici</strong></div><p>Partite, contesto del torneo, statistiche tecniche, calendari e classifiche: feed pubblico ESPN. News Pulse: Google News, usato solo per titoli datati e collegamenti alle fonti. ANSA Calcio e Football Italia alimentano la sezione notizie.</p></section><section class="form-comparison"><h3>Come si aggiorna</h3><p style="color:var(--muted);font-size:10px;line-height:1.6">Le partite vengono ricontrollate ogni 90 secondi mentre il sito è aperto; le notizie ogni pochi minuti. In caso di errore temporaneo, viene mantenuta l’ultima risposta valida in cache.</p><h3 style="margin-top:18px">Power Model 2.1 + Match Intelligence</h3><p style="color:var(--muted);font-size:10px;line-height:1.6">Il Power Model combina distribuzione di Poisson, forma, precedenti, fattore campo e consenso di mercato senza margine quando presente. Match Intelligence aggiunge fase e aggregato, riposo, carico gare, campioni tecnici recenti, giocatori chiave, formazioni ufficiali e news pertinenti. Ogni elemento è marcato come fatto, lettura derivata o dato da verificare. Nessun esito è garantito.</p></section><div class="modal-note">${icon('shield')}<span>Preferiti, tema e alert sono salvati localmente nel browser. Il sito non richiede account e non invia dati personali.</span></div><div class="modal-actions"><button class="button primary" data-close-modal>Ho capito</button></div></div>`;
+  modal.innerHTML = `<button class="modal-close" data-close-modal aria-label="Chiudi">${icon('x')}</button><header class="modal-hero"><span class="modal-competition"><i></i>TRASPARENZA</span><div style="position:relative;z-index:1;margin-top:24px"><h2 style="margin:0 0 8px;font-size:26px">Dati gratuiti, metodo chiaro.</h2><p style="margin:0;color:rgba(255,255,255,.65);font-size:11px;line-height:1.5">Nessun abbonamento e nessuna chiave API a pagamento.</p></div></header><div class="modal-body"><section class="analysis-box"><div class="analysis-box-head"><span>Fonti attive</span><strong>Feed pubblici</strong></div><p>Partite, contesto del torneo, statistiche tecniche, calendari e classifiche: feed pubblico ESPN. News Pulse: Google News, usato solo per titoli datati e collegamenti alle fonti. ANSA Calcio e Football Italia alimentano la sezione notizie.</p></section><section class="form-comparison"><h3>Come si aggiorna</h3><p style="color:var(--muted);font-size:10px;line-height:1.6">Le partite vengono ricontrollate ogni 90 secondi mentre il sito è aperto; le notizie ogni pochi minuti. A mezzanotte il calendario avanza automaticamente sul nuovo giorno nel fuso Europe/Rome. In caso di errore temporaneo, viene mantenuta l’ultima risposta valida in cache.</p><h3 style="margin-top:18px">Power Model 2.1 + Match Intelligence</h3><p style="color:var(--muted);font-size:10px;line-height:1.6">Il Power Model combina distribuzione di Poisson, forma, precedenti, fattore campo e consenso di mercato senza margine quando presente. Match Intelligence aggiunge fase e aggregato, riposo, carico gare, campioni tecnici recenti, giocatori chiave, formazioni ufficiali e news pertinenti. Ogni elemento è marcato come fatto, lettura derivata o dato da verificare. Nessun esito è garantito.</p></section><div class="modal-note">${icon('shield')}<span>Preferiti, tema e alert sono salvati localmente nel browser. Il sito non richiede account e non invia dati personali.</span></div><div class="modal-actions"><button class="button primary" data-close-modal>Ho capito</button></div></div>`;
   $('#modalLayer').hidden = false;
   document.body.style.overflow = 'hidden';
 }
@@ -721,13 +810,21 @@ function renderSearchResults(query) {
     existing.matches.push(match);
     teamMap.set(key, existing);
   }));
-  const teams = [...teamMap.values()].filter(item => !needle || item.team.name.toLocaleLowerCase('it').includes(needle)).slice(0, 8);
-  const leagues = state.leagues.filter(league => needle && league.label.toLocaleLowerCase('it').includes(needle)).slice(0, 3);
-  const results = [
-    ...leagues.map(league => `<button class="search-result" data-search-league="${league.id}"><span class="search-result-icon">${icon('table')}</span><span><strong>${escapeHtml(league.label)}</strong><span>${escapeHtml(league.country)} · calendario e classifica</span></span>${icon('chevron')}</button>`),
-    ...teams.map(item => `<button class="search-result" data-search-match="${escapeHtml(item.matches[0].id)}">${teamLogo(item.team, 'search-logo')}<span><strong>${escapeHtml(item.team.name)}</strong><span>${item.matches.length} ${item.matches.length === 1 ? 'partita disponibile' : 'partite disponibili'}</span></span>${icon('chevron')}</button>`)
-  ];
-  root.innerHTML = results.length ? results.join('') : `<div class="search-empty">Nessun risultato per “${escapeHtml(query)}”</div>`;
+  if (!needle) {
+    const spotlight = radarMatches(5);
+    root.innerHTML = `<header class="search-intro"><span class="broadcast-label"><i></i>SCOUT SEARCH</span><h2>Cerca nel calcio che conta</h2><p>Squadre, competizioni, partite e titoli dal flusso aggiornato.</p></header><div class="search-section-label">IN EVIDENZA ADESSO</div>${spotlight.map(match => `<button class="search-result search-match-result" data-search-match="${escapeHtml(match.id)}"><span class="search-result-score">${match.opportunity}</span><span><strong>${escapeHtml(match.home.name)} — ${escapeHtml(match.away.name)}</strong><span>${escapeHtml(match.league.label)} · ${escapeHtml(displayDate(match.date))}</span></span>${icon('chevron')}</button>`).join('') || '<div class="search-empty">Il calendario è in aggiornamento.</div>'}`;
+    return;
+  }
+  const matchResults = state.matches.filter(match => `${match.home.name} ${match.away.name} ${match.league.label}`.toLocaleLowerCase('it').includes(needle)).slice(0, 5);
+  const teams = [...teamMap.values()].filter(item => item.team.name.toLocaleLowerCase('it').includes(needle)).slice(0, 5);
+  const leagues = state.leagues.filter(league => `${league.label} ${league.country}`.toLocaleLowerCase('it').includes(needle)).slice(0, 4);
+  const newsResults = state.news.filter(article => `${article.title} ${article.source}`.toLocaleLowerCase('it').includes(needle)).slice(0, 4);
+  const sections = [];
+  if (matchResults.length) sections.push(`<div class="search-section-label">PARTITE</div>${matchResults.map(match => `<button class="search-result search-match-result" data-search-match="${escapeHtml(match.id)}"><span class="search-result-score">${match.opportunity}</span><span><strong>${escapeHtml(match.home.name)} — ${escapeHtml(match.away.name)}</strong><span>${escapeHtml(match.league.label)} · ${escapeHtml(displayDate(match.date))}</span></span>${icon('chevron')}</button>`).join('')}`);
+  if (leagues.length) sections.push(`<div class="search-section-label">COMPETIZIONI</div>${leagues.map(league => `<button class="search-result" data-search-league="${league.id}"><span class="search-result-icon">${icon('table')}</span><span><strong>${escapeHtml(league.label)}</strong><span>${escapeHtml(league.country)} · calendario e classifica</span></span>${icon('chevron')}</button>`).join('')}`);
+  if (teams.length) sections.push(`<div class="search-section-label">SQUADRE</div>${teams.map(item => `<button class="search-result" data-search-match="${escapeHtml(item.matches[0].id)}">${teamLogo(item.team, 'search-logo')}<span><strong>${escapeHtml(item.team.name)}</strong><span>${item.matches.length} ${item.matches.length === 1 ? 'partita disponibile' : 'partite disponibili'}</span></span>${icon('chevron')}</button>`).join('')}`);
+  if (newsResults.length) sections.push(`<div class="search-section-label">NEWSROOM</div>${newsResults.map(article => `<button class="search-result" data-search-news-url="${safeUrl(article.link)}"><span class="search-result-icon">${icon('news')}</span><span><strong>${escapeHtml(article.title)}</strong><span>${escapeHtml(article.source)} · ${escapeHtml(newsTopic(article))}</span></span>${icon('external')}</button>`).join('')}`);
+  root.innerHTML = sections.length ? sections.join('') : `<div class="search-empty">Nessun risultato per “${escapeHtml(query)}”</div>`;
 }
 
 function toast(message, error = false) {
@@ -783,6 +880,8 @@ function setupEvents() {
     if (searchMatch) { closeSearch(); return openMatch(searchMatch.dataset.searchMatch); }
     const searchLeague = event.target.closest('[data-search-league]');
     if (searchLeague) { state.matchLeague = searchLeague.dataset.searchLeague; state.selectedDate = 'all'; closeSearch(); return goTo('matches'); }
+    const searchNews = event.target.closest('[data-search-news-url]');
+    if (searchNews) { const url = safeUrl(searchNews.dataset.searchNewsUrl); closeSearch(); if (url) window.open(url, '_blank', 'noopener,noreferrer'); return; }
     if (event.target.closest('[data-close-modal]')) return closeModal();
     if (event.target.closest('[data-close-search]')) return closeSearch();
     if (event.target.closest('#viewRefresh')) return refreshAll(true);
@@ -808,7 +907,16 @@ function setupEvents() {
   document.addEventListener('keydown', event => {
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); openSearch(); }
     if (event.key === 'Escape') { if (!$('#searchLayer').hidden) closeSearch(); else if (!$('#modalLayer').hidden) closeModal(); }
-    if (event.key === 'Enter' && event.target.matches('.news-card, .intel-news')) event.target.click();
+    if (!$('#searchLayer').hidden && ['ArrowDown', 'ArrowUp'].includes(event.key)) {
+      const results = $$('.search-result', $('#searchResults'));
+      if (results.length) {
+        event.preventDefault();
+        const current = results.indexOf(document.activeElement);
+        const next = event.key === 'ArrowDown' ? (current + 1) % results.length : (current <= 0 ? results.length - 1 : current - 1);
+        results[next].focus();
+      }
+    }
+    if (event.key === 'Enter' && event.target.matches('.news-card, .intel-news, .newsroom-side-story, .lead-story')) event.target.click();
   });
 
   window.addEventListener('hashchange', () => {
