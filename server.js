@@ -39,7 +39,8 @@ const GLOBAL_COMPETITIONS = {
   '21231': { id: 'ksa.1', label: 'Saudi Pro League', country: 'Arabia Saudita', accent: '#62ca74', weight: 12 },
   '3932': { id: 'mex.2', label: 'Liga de Expansión MX', country: 'Messico', accent: '#d65c70', weight: 9 },
   '8313': { id: 'col.1', label: 'Primera A Colombia', country: 'Colombia', accent: '#f3c849', weight: 11 },
-  '22947': { id: 'pan.1', label: 'Liga Panamense', country: 'Panama', accent: '#5d91e8', weight: 8 }
+  '22947': { id: 'pan.1', label: 'Liga Panamense', country: 'Panama', accent: '#5d91e8', weight: 8 },
+  '5462': { id: 'uefa.super_cup', label: 'Supercoppa UEFA', country: 'Europa', accent: '#8da2ff', weight: 25 }
 };
 
 const ANALYSIS_LEAGUES = new Set([
@@ -225,7 +226,7 @@ async function getMatches({ leagueId = 'all', from, to, force = false }) {
     const jobs = selected.map(league => ({ id: league.id, type: 'league', promise: getLeagueMatches(league, from, to) }));
     if (leagueId === 'all') {
       const today = romeDate();
-      [today, addDays(today, 1)].filter(date => date >= from && date <= to).forEach(date => {
+      [addDays(today, -1), today, addDays(today, 1)].filter(date => date >= from && date <= to).forEach(date => {
         jobs.push({ id: `global:${date}`, type: 'global', promise: getGlobalMatches(date) });
       });
     }
@@ -724,6 +725,44 @@ async function fetchEventSummary(eventId, leagueId) {
   }
 }
 
+function normalizeCurrentMatchStats(summary) {
+  return (summary.boxscore?.teams || []).map(block => ({
+    teamId: String(block.team?.id || ''),
+    teamName: block.team?.shortDisplayName || block.team?.displayName || 'Squadra',
+    logo: block.team?.logo || '',
+    metrics: {
+      possession: statFromTeamBlock(block, 'possessionPct'),
+      shots: statFromTeamBlock(block, 'totalShots'),
+      shotsOnTarget: statFromTeamBlock(block, 'shotsOnTarget'),
+      corners: statFromTeamBlock(block, 'wonCorners'),
+      passAccuracy: statFromTeamBlock(block, 'passPct'),
+      accuratePasses: statFromTeamBlock(block, 'accuratePasses'),
+      totalPasses: statFromTeamBlock(block, 'totalPasses'),
+      tackles: statFromTeamBlock(block, 'totalTackles'),
+      clearances: statFromTeamBlock(block, 'totalClearance'),
+      saves: statFromTeamBlock(block, 'saves'),
+      fouls: statFromTeamBlock(block, 'foulsCommitted'),
+      yellowCards: statFromTeamBlock(block, 'yellowCards'),
+      redCards: statFromTeamBlock(block, 'redCards'),
+      offsides: statFromTeamBlock(block, 'offsides')
+    }
+  }));
+}
+
+function normalizeKeyEvents(summary) {
+  return (summary.keyEvents || []).filter(event => event.scoringPlay || ['yellow-card', 'red-card'].includes(event.type?.type)).map(event => ({
+    id: String(event.id || ''),
+    type: event.type?.type || '',
+    label: event.type?.text || '',
+    minute: event.clock?.displayValue || '',
+    text: event.shortText || event.text || '',
+    teamId: String(event.team?.id || ''),
+    teamName: event.team?.displayName || '',
+    player: event.participants?.[0]?.athlete?.displayName || '',
+    scoring: Boolean(event.scoringPlay)
+  })).slice(0, 20);
+}
+
 async function getAnalysis(eventId, leagueId, force = false) {
   if (!/^\d{5,15}$/.test(String(eventId))) throw new Error('Evento non valido');
   if (!ANALYSIS_LEAGUES.has(leagueId)) throw new Error('Competizione non supportata per l’analisi avanzata');
@@ -735,12 +774,14 @@ async function getAnalysis(eventId, leagueId, force = false) {
     const homeTeam = {
       id: String(homeEntry.team?.id || homeEntry.id || ''),
       name: homeEntry.team?.shortDisplayName || homeEntry.team?.displayName || 'Casa',
-      logo: homeEntry.team?.logos?.[0]?.href || ''
+      logo: homeEntry.team?.logos?.[0]?.href || '',
+      score: Number(homeEntry.score || 0), winner: Boolean(homeEntry.winner)
     };
     const awayTeam = {
       id: String(awayEntry.team?.id || awayEntry.id || ''),
       name: awayEntry.team?.shortDisplayName || awayEntry.team?.displayName || 'Ospite',
-      logo: awayEntry.team?.logos?.[0]?.href || ''
+      logo: awayEntry.team?.logos?.[0]?.href || '',
+      score: Number(awayEntry.score || 0), winner: Boolean(awayEntry.winner)
     };
     const recentBlocks = summary.lastFiveGames || [];
     const homeRecent = normalizeRecentTeam(recentBlocks.find(item => String(item.team?.id) === homeTeam.id) || recentBlocks[0] || { team: homeTeam });
@@ -752,6 +793,9 @@ async function getAnalysis(eventId, leagueId, force = false) {
     const tournamentStats = normalizeTournamentStats(summary);
     const leaders = normalizeTeamLeaders(summary);
     const lineups = normalizeLineups(summary);
+    const matchStats = normalizeCurrentMatchStats(summary);
+    const keyEvents = normalizeKeyEvents(summary);
+    const matchState = competition.status?.type?.state || 'pre';
     const model = statisticalModel(homeRecent, awayRecent);
     const consensus = market?.outcome ? {
       home: model.outcome.home * 0.58 + market.outcome.home * 0.42,
@@ -772,9 +816,11 @@ async function getAnalysis(eventId, leagueId, force = false) {
     if (market?.totals) findings.push(`Il feed di mercato colloca la linea gol a ${market.totals.line}.`);
     const seasonTransition = (standings.home?.played === 0 && standings.away?.played === 0);
     return {
-      event: { id: String(eventId), leagueId, date: competition.date || '', home: homeTeam, away: awayTeam },
+      event: { id: String(eventId), leagueId, date: competition.date || '', state: matchState, completed: Boolean(competition.status?.type?.completed), status: competition.status?.type?.shortDetail || competition.status?.type?.detail || '', home: homeTeam, away: awayTeam },
       context,
       tournamentStats,
+      matchStats,
+      keyEvents,
       leaders,
       lineups,
       engine: { version: '2.1', name: 'VANTAGGIO Power Model', generatedAt: nowIso(), quality, sampleSize: recentSamples + h2h.total },
@@ -987,6 +1033,50 @@ function recentSummaryForDna(events) {
   };
 }
 
+async function getTeamSeasonArchive(teamId, leagueId, eventDate) {
+  const eventYear = new Date(eventDate).getUTCFullYear();
+  const season = eventYear - 1;
+  return (await cached(`season-archive:v2:${teamId}:${season}`, 6 * 60 * 60_000, async () => {
+    const urls = [
+      `https://site.api.espn.com/apis/site/v2/sports/soccer/all/teams/${encodeURIComponent(teamId)}/schedule?season=${season}`,
+      `https://site.api.espn.com/apis/site/v2/sports/soccer/${encodeURIComponent(leagueId)}/teams/${encodeURIComponent(teamId)}/schedule?season=${season}`
+    ];
+    let schedule = { events: [], team: {} };
+    for (const url of urls) {
+      try {
+        const candidate = await fetchJson(url, 12_000);
+        if (candidate.events?.length) { schedule = candidate; break; }
+      } catch { /* fallback */ }
+    }
+    const events = normalizeTeamScheduleEvents(schedule, teamId).filter(event => event.completed && new Date(event.date).getTime() < new Date(eventDate).getTime());
+    const wins = events.filter(event => event.result === 'V').length;
+    const draws = events.filter(event => event.result === 'P').length;
+    const losses = events.filter(event => event.result === 'S').length;
+    const goalsFor = events.reduce((sum, event) => sum + event.goalsFor, 0);
+    const goalsAgainst = events.reduce((sum, event) => sum + event.goalsAgainst, 0);
+    const competitions = new Map();
+    events.forEach(event => {
+      const name = event.competition || 'Competizione';
+      const item = competitions.get(name) || { name, played: 0, wins: 0, draws: 0, losses: 0, goalsFor: 0, goalsAgainst: 0 };
+      item.played += 1;
+      item.wins += event.result === 'V' ? 1 : 0;
+      item.draws += event.result === 'P' ? 1 : 0;
+      item.losses += event.result === 'S' ? 1 : 0;
+      item.goalsFor += event.goalsFor;
+      item.goalsAgainst += event.goalsAgainst;
+      competitions.set(name, item);
+    });
+    return {
+      season: `${season}-${String(season + 1).slice(-2)}`, played: events.length, wins, draws, losses, goalsFor, goalsAgainst,
+      avgGoalsFor: events.length ? round1(goalsFor / events.length) : null,
+      avgGoalsAgainst: events.length ? round1(goalsAgainst / events.length) : null,
+      cleanSheets: events.filter(event => event.goalsAgainst === 0).length,
+      competitions: [...competitions.values()].sort((a, b) => b.played - a.played).slice(0, 8),
+      scope: 'Tutte le competizioni presenti nel calendario della squadra'
+    };
+  })).value;
+}
+
 function reliabilityLabel(score) {
   return score >= 82 ? 'Solida' : score >= 65 ? 'Buona' : score >= 45 ? 'Parziale' : 'Debole';
 }
@@ -1155,6 +1245,100 @@ function buildMatchScript(context, tactical, homeName, awayName) {
   ];
 }
 
+function buildDeepDive(analysis, tactical, homeCalendar, awayCalendar, homeSeason, awaySeason) {
+  const { home, away, state } = analysis.event;
+  const homeMatch = (analysis.matchStats || []).find(item => item.teamId === home.id);
+  const awayMatch = (analysis.matchStats || []).find(item => item.teamId === away.id);
+  const homeMetrics = homeMatch?.metrics || {};
+  const awayMetrics = awayMatch?.metrics || {};
+  const completed = state === 'post' || analysis.event.completed;
+  const h2hGoals = (analysis.h2h?.events || []).reduce((sum, event) => sum + Number(event.home.score || 0) + Number(event.away.score || 0), 0);
+  const paragraphs = [];
+  const keyNumbers = [];
+  const watchlist = [];
+  let label = 'DEEP RESEARCH BRIEF';
+  let title = `${home.name}–${away.name}: la partita oltre le percentuali`;
+  let dek = analysis.context.facts?.[0] || 'Contesto, forma, stili e qualità dei dati riuniti in una lettura editoriale verificabile.';
+
+  if (completed) {
+    label = 'DEEP MATCH REVIEW';
+    const winner = home.score > away.score ? home : away.score > home.score ? away : null;
+    title = winner ? `${winner.name} vince ${home.score}-${away.score}: come si è decisa davvero` : `${home.name} e ${away.name} chiudono ${home.score}-${away.score}`;
+    dek = `${analysis.context.phase || 'Partita ufficiale'} · ${analysis.context.venue?.name || 'sede non disponibile'} · analisi costruita sui dati effettivi della gara.`;
+    paragraphs.push({ type: 'Fatto', title: 'Il risultato', text: `${home.name} ${home.score}-${away.score} ${away.name}. ${(analysis.keyEvents || []).filter(event => event.scoring).map(event => `${event.player || event.teamName} ${event.minute}`).join(', ') || 'Marcatori non disponibili nel feed.'}` });
+    if (homeMetrics.possession != null && awayMetrics.possession != null) {
+      const controller = homeMetrics.possession >= awayMetrics.possession ? home : away;
+      const reactor = controller.id === home.id ? away : home;
+      paragraphs.push({ type: 'Fatto', title: 'Territorio', text: `${controller.name} ha avuto il ${Math.max(homeMetrics.possession, awayMetrics.possession)}% di possesso contro il ${Math.min(homeMetrics.possession, awayMetrics.possession)}% di ${reactor.name}.` });
+    }
+    if (homeMetrics.shots != null && awayMetrics.shots != null) {
+      const volumeTeam = homeMetrics.shots >= awayMetrics.shots ? home : away;
+      const volume = Math.max(homeMetrics.shots, awayMetrics.shots);
+      paragraphs.push({ type: 'Lettura', title: 'Volume contro precisione', text: `${volumeTeam.name} ha prodotto più tiri (${volume}), ma il rapporto fra conclusioni e tiri in porta mostra perché il solo volume non spiega il risultato: ${home.name} ${homeMetrics.shotsOnTarget ?? '–'} in porta, ${away.name} ${awayMetrics.shotsOnTarget ?? '–'}.` });
+    }
+    if (homeMetrics.passAccuracy != null && awayMetrics.passAccuracy != null) paragraphs.push({ type: 'Lettura', title: 'Controllo tecnico', text: `Precisione passaggi: ${home.name} ${homeMetrics.passAccuracy}%, ${away.name} ${awayMetrics.passAccuracy}%. Il dato va letto insieme a possesso e stato del punteggio, non come qualità assoluta.` });
+    if ((homeMetrics.yellowCards || 0) !== (awayMetrics.yellowCards || 0)) paragraphs.push({ type: 'Fatto', title: 'Disciplina', text: `Cartellini gialli: ${home.name} ${homeMetrics.yellowCards ?? 0}, ${away.name} ${awayMetrics.yellowCards ?? 0}.` });
+    keyNumbers.push(
+      { label: 'Risultato', value: `${home.score}-${away.score}`, note: 'dato finale' },
+      { label: 'Possesso', value: homeMetrics.possession == null ? 'n/d' : `${homeMetrics.possession}%`, note: home.name },
+      { label: 'Tiri', value: homeMetrics.shots == null ? 'n/d' : `${homeMetrics.shots}-${awayMetrics.shots}`, note: 'casa-ospite' },
+      { label: 'In porta', value: homeMetrics.shotsOnTarget == null ? 'n/d' : `${homeMetrics.shotsOnTarget}-${awayMetrics.shotsOnTarget}`, note: 'casa-ospite' },
+      { label: 'Passaggi', value: homeMetrics.passAccuracy == null ? 'n/d' : `${homeMetrics.passAccuracy}%`, note: home.name },
+      { label: 'Eventi chiave', value: String((analysis.keyEvents || []).length), note: 'gol e cartellini' }
+    );
+    watchlist.push('Le quote e i consigli pre-partita vengono archiviati dopo il fischio finale: non presentiamo raccomandazioni retroattive come se fossero previsioni.');
+  } else {
+    const homeRest = homeCalendar.restDays == null ? 'n/d' : `${homeCalendar.restDays} giorni`;
+    const awayRest = awayCalendar.restDays == null ? 'n/d' : `${awayCalendar.restDays} giorni`;
+    paragraphs.push({ type: 'Fatto', title: 'Forma recente', text: `${home.name}: ${analysis.recent.home.wins}V-${analysis.recent.home.draws}P-${analysis.recent.home.losses}S, ${analysis.recent.home.avgGoalsFor ?? '–'} gol fatti di media. ${away.name}: ${analysis.recent.away.wins}V-${analysis.recent.away.draws}P-${analysis.recent.away.losses}S, ${analysis.recent.away.avgGoalsFor ?? '–'} gol fatti di media.` });
+    paragraphs.push({ type: 'Fatto', title: 'Recupero', text: `${home.name}: ${homeRest} dall’ultima gara; ${away.name}: ${awayRest}. Carico negli ultimi 14 giorni: ${homeCalendar.matchesLast14} contro ${awayCalendar.matchesLast14}.` });
+    paragraphs.push({ type: 'Lettura', title: 'Incrocio di stili', text: tactical.matchup?.[0] || `${tactical.home.style} contro ${tactical.away.style}: il campione non mostra ancora un contrasto tattico netto.` });
+    if (analysis.h2h?.total) paragraphs.push({ type: 'Fatto', title: 'Precedenti', text: `${analysis.h2h.total} ${analysis.h2h.total === 1 ? 'confronto disponibile' : 'confronti disponibili'}, ${h2hGoals} gol complessivi nel campione del feed.` });
+    const topSignals = (analysis.signals || []).slice(0, 3);
+    topSignals.forEach(signal => keyNumbers.push({ label: signal.label, value: `${signal.probability}%`, note: 'stima modello' }));
+    keyNumbers.push({ label: 'Qualità modello', value: `${analysis.engine.quality}/100`, note: reliabilityLabel(analysis.engine.quality) });
+    keyNumbers.push({ label: 'Riposo casa', value: homeRest, note: home.name });
+    keyNumbers.push({ label: 'Riposo ospite', value: awayRest, note: away.name });
+    watchlist.push(...(analysis.context.incentives || []).slice(0, 2));
+    if (!analysis.lineups.official) watchlist.push('Formazioni ufficiali non ancora disponibili: turnover e assenze possono cambiare la lettura.');
+  }
+
+  if (homeSeason?.played || awaySeason?.played) {
+    const homeText = homeSeason?.played ? `${home.name}: ${homeSeason.played} gare, ${homeSeason.wins}V-${homeSeason.draws}P-${homeSeason.losses}S, ${homeSeason.goalsFor} gol fatti e ${homeSeason.goalsAgainst} subiti` : `${home.name}: archivio non disponibile`;
+    const awayText = awaySeason?.played ? `${away.name}: ${awaySeason.played} gare, ${awaySeason.wins}V-${awaySeason.draws}P-${awaySeason.losses}S, ${awaySeason.goalsFor} gol fatti e ${awaySeason.goalsAgainst} subiti` : `${away.name}: archivio non disponibile`;
+    paragraphs.push({ type: 'Fatto', title: 'Season Vault', text: `${homeText}. ${awayText}. Totali su tutte le competizioni presenti nel calendario ${homeSeason?.season || awaySeason?.season || 'precedente'}.` });
+  }
+  const teamCases = [
+    { side: 'home', actualMatch: completed, team: home, style: tactical.home.style, observedGames: tactical.home.observedGames, recent: analysis.recent.home, season: homeSeason, sample: tactical.home.metrics, actual: homeMetrics, traits: tactical.home.traits, vulnerabilities: tactical.home.vulnerabilities },
+    { side: 'away', actualMatch: completed, team: away, style: tactical.away.style, observedGames: tactical.away.observedGames, recent: analysis.recent.away, season: awaySeason, sample: tactical.away.metrics, actual: awayMetrics, traits: tactical.away.traits, vulnerabilities: tactical.away.vulnerabilities }
+  ];
+  const toDecimal = value => {
+    const american = Number(value);
+    if (!Number.isFinite(american) || american === 0) return null;
+    return round1(american > 0 ? 1 + american / 100 : 1 + 100 / Math.abs(american));
+  };
+  const marketSnapshot = !completed && analysis.market?.available ? {
+    provider: analysis.market.provider || 'Provider del feed',
+    updated: analysis.market.updated || analysis.engine.generatedAt,
+    prices: [
+      { id: 'home', label: home.name, decimal: toDecimal(analysis.market.raw?.home) },
+      { id: 'draw', label: 'Pareggio', decimal: toDecimal(analysis.market.raw?.draw) },
+      { id: 'away', label: away.name, decimal: toDecimal(analysis.market.raw?.away) }
+    ].filter(item => item.decimal),
+    totalLine: analysis.market.totals?.line ?? null,
+    note: 'Snapshot informativo del provider incluso nel feed. Può variare o risultare non disponibile; non è una raccomandazione.'
+  } : null;
+  const unavailable = [];
+  if (![homeMetrics, awayMetrics].some(metrics => metrics.xg != null)) unavailable.push('xG della singola gara non disponibile nel feed primario: non viene stimato o inventato.');
+  if (!analysis.lineups.official && !completed) unavailable.push('Undici ufficiali non confermati.');
+  unavailable.push('Assenze e condizione medica richiedono comunicati ufficiali: titoli e feed vuoti non sono conferme.');
+  return {
+    mode: completed ? 'post' : 'pre', label, title, dek, paragraphs: paragraphs.slice(0, 6), keyNumbers: keyNumbers.slice(0, 6),
+    teamCases, keyMoments: (analysis.keyEvents || []).filter(event => event.scoring).slice(0, 8), watchlist, unavailable, marketSnapshot,
+    sourceNote: 'Testo generato da regole trasparenti sui dati del feed e sulle letture dichiarate; nessun dato numerico viene aggiunto senza un campo sorgente.'
+  };
+}
+
 async function getIntelligence(eventId, leagueId, force = false) {
   return cached(`intelligence:v1:${leagueId}:${eventId}`, 10 * 60_000, async () => {
     const analysisResult = await getAnalysis(eventId, leagueId, force);
@@ -1166,6 +1350,8 @@ async function getIntelligence(eventId, leagueId, force = false) {
       getTeamScheduleIntelligence(home.id, leagueId, date),
       getTeamScheduleIntelligence(away.id, leagueId, date),
       getMatchNews(home.name, away.name),
+      getTeamSeasonArchive(home.id, leagueId, date),
+      getTeamSeasonArchive(away.id, leagueId, date),
       ...homeRecentEvents.map(event => getPastMatchSnapshot(event, home.id)),
       ...awayRecentEvents.map(event => getPastMatchSnapshot(event, away.id))
     ];
@@ -1174,8 +1360,10 @@ async function getIntelligence(eventId, leagueId, force = false) {
     const homeSchedule = valueAt(0) || { events: [], team: {} };
     const awaySchedule = valueAt(1) || { events: [], team: {} };
     const news = valueAt(2) || [];
-    const homeSnapshots = homeRecentEvents.map((_, index) => valueAt(3 + index)).filter(Boolean);
-    const awayStart = 3 + homeRecentEvents.length;
+    const homeSeason = valueAt(3) || null;
+    const awaySeason = valueAt(4) || null;
+    const homeSnapshots = homeRecentEvents.map((_, index) => valueAt(5 + index)).filter(Boolean);
+    const awayStart = 5 + homeRecentEvents.length;
     const awaySnapshots = awayRecentEvents.map((_, index) => valueAt(awayStart + index)).filter(Boolean);
     const homeTactical = buildTacticalProfile(home.name, homeSnapshots, analysis.recent.home);
     const awayTactical = buildTacticalProfile(away.name, awaySnapshots, analysis.recent.away);
@@ -1202,11 +1390,13 @@ async function getIntelligence(eventId, leagueId, force = false) {
 
     const tactical = { home: homeTactical, away: awayTactical, matchup };
     const reliability = buildMatchReliability(analysis, homeCalendar, awayCalendar, tactical, news);
+    const deepDive = buildDeepDive(analysis, tactical, homeCalendar, awayCalendar, homeSeason, awaySeason);
     return {
       engine: { version: '1.1', name: 'VANTAGGIO Match Intelligence', generatedAt: nowIso() },
       event: analysis.event,
       generatedAt: nowIso(),
       context: analysis.context,
+      deepDive,
       critical: critical.slice(0, 9),
       calendar: { home: homeCalendar, away: awayCalendar },
       tactical,
