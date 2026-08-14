@@ -1762,3 +1762,7 @@ kbd { padding: 3px 7px; background: var(--panel-2); border: 1px solid var(--line
   .xi-list > div { grid-template-columns:1fr; }
   .xi-list p { border-right:0; }
 }
+
+/* V4.8.1 · Global Calendar transparency */
+.calendar-limit-note { margin:14px 0; padding:12px 14px; display:flex; align-items:flex-start; gap:9px; border:1px dashed var(--line-strong); border-radius:12px; color:var(--muted); background:var(--panel-2); font-size:8px; line-height:1.5; }
+.calendar-limit-note svg { flex:none; width:14px; height:14px; color:var(--accent); }

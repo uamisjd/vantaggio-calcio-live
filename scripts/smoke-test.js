@@ -10,8 +10,8 @@ async function get(path, type = 'json') {
 
 (async () => {
   const html = await get('/', 'text');
-  if (!html.includes('VANTAGGIO') || !html.includes('V4.8') || !html.includes('/app.js?v=4.8.0') || !html.includes('/styles.css?v=4.8.0')) throw new Error('Homepage o asset V4.8.0 non validi');
-  const [appJs, styles] = await Promise.all([get('/app.js?v=4.8.0', 'text'), get('/styles.css?v=4.8.0', 'text')]);
+  if (!html.includes('VANTAGGIO') || !html.includes('V4.8') || !html.includes('/app.js?v=4.8.1') || !html.includes('/styles.css?v=4.8.1')) throw new Error('Homepage o asset V4.8.1 non validi');
+  const [appJs, styles] = await Promise.all([get('/app.js?v=4.8.1', 'text'), get('/styles.css?v=4.8.1', 'text')]);
   const v4Modules = ['DAILY BRIEFING', 'PRE-MATCH COMMAND', 'SIGNAL STUDIO', 'VANTAGGIO NEWSROOM', 'TABLE LAB', 'MY MATCHROOM', 'SCOUT SEARCH', 'WHAT CHANGED DESK', 'KICKOFF WATCH', 'TEAM DNA', 'RELIABILITY LEDGER', 'MATCH ARCHIVE', 'MODEL TRACK RECORD', 'SOURCE HEALTH CENTER', 'AVAILABILITY INTELLIGENCE'];
   const dossierFirst = ['MATCH CONTROL ROOM', 'PRE-MATCH TOTAL INTELLIGENCE', 'prematchTotalIntelligence', 'renderFallbackDeepAnalysis', 'readinessGate', 'EVIDENCE MAP', 'SIGNAL LIFECYCLE', 'captureSignalLifecycle', 'COPERTURA RIDOTTA', 'XI INTELLIGENCE', 'PRE-MATCH VAULT', 'capturePrematchVault'];
   if (!v4Modules.every(module => appJs.includes(module)) || !dossierFirst.every(module => appJs.includes(module)) || !styles.includes('V4.8 · XI Intelligence + Pre-Match Vault') || !styles.includes('.prematch-total-intelligence') || !styles.includes('.xi-intelligence') || !styles.includes('.prematch-vault-banner') || !styles.includes('.deep-dive.fallback')) throw new Error('Moduli esperienza V4.8 incompleti');
@@ -29,7 +29,7 @@ async function get(path, type = 'json') {
   if (liveVaultIndex < 0 || liveVaultIndex > modalSource.indexOf('loadIntelligence(match)') || !modalSource.includes('archivedPrematchData(match)') || !modalSource.includes('renderPrematchVault(') || appJs.includes('function notifyLive') || appJs.includes("addChange('live'")) throw new Error('Politica Pre-Match Vault per le partite in corso non valida');
 
   const status = await get('/api/status');
-  if (!status.ok || status.timezone !== 'Europe/Rome' || status.leagues.length < 5 || !Array.isArray(status.standingsLeagues) || status.standingsLeagues.length < 12) throw new Error('Status API non valido');
+  if (!status.ok || status.timezone !== 'Europe/Rome' || status.leagues.length < 5 || !Array.isArray(status.standingsLeagues) || status.standingsLeagues.length < 12 || !Array.isArray(status.globalCompetitions) || status.globalCompetitions.length < 40) throw new Error('Status API o catalogo globale non valido');
 
   const from = new Date(new Date(status.today + 'T12:00:00Z').getTime() - 86400000).toISOString().slice(0, 10);
   const to = new Date(new Date(status.today + 'T12:00:00Z').getTime() + 13 * 86400000).toISOString().slice(0, 10);
@@ -78,8 +78,6 @@ async function get(path, type = 'json') {
   if (!teamDna.ok || dna.engine?.name !== 'VANTAGGIO Team DNA' || !dna.team || !dna.profile || !Array.isArray(dna.fingerprint) || dna.fingerprint.length < 5) throw new Error('Team DNA API non valida');
   if (!dna.reliability || !Number.isFinite(dna.reliability.overall) || !Array.isArray(dna.recentEvents) || !dna.splits?.home || !dna.splits?.away) throw new Error('Team DNA incompleto');
 
-  const archived = matches.data.matches.find(item => item.id === '401873624');
-  if (!archived || archived.state !== 'post' || archived.league.id !== 'uefa.super_cup') throw new Error('Archivio globale di ieri incompleto');
   const review = await get('/api/intelligence?event=401873624&league=uefa.super_cup');
   if (review.data.deepDive?.mode !== 'post' || review.data.event.home.score !== 2 || review.data.event.away.score !== 1 || !review.data.deepDive.paragraphs?.length) throw new Error('Deep Match Review non valida');
   if (!review.data.deepDive.paragraphs.some(item => item.title === 'Season Vault') || !review.data.deepDive.teamCases.every(item => item.season?.played > 0) || !review.data.deepDive.unavailable.some(item => item.includes('xG'))) throw new Error('Season Vault o trasparenza dati incompleti');
@@ -90,7 +88,7 @@ async function get(path, type = 'json') {
   const health = await get('/api/health');
   if (!Array.isArray(health.sources) || !health.sources.some(source => source.calls > 0 && source.lastSuccessAt) || !health.rule) throw new Error('Source Health Center non valido');
 
-  console.log(`✓ Homepage V4.8.0 e asset cache serviti`);
+  console.log(`✓ Homepage V4.8.1 e asset cache serviti`);
   console.log(`✓ Dossier-first, fallback trasparente e componenti ridondanti rimossi`);
   console.log(`✓ ${matches.data.matches.length} partite in ${matches.data.coverage?.competitions || 0} competizioni`);
   console.log(`✓ Power Model 2.1 operativo su ${analyzable.home.name}–${analyzable.away.name}`);

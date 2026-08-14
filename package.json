@@ -1,8 +1,8 @@
 {
   "name": "vantaggio-calcio",
-  "version": "4.8.0",
+  "version": "4.8.1",
   "private": true,
-  "description": "XI Intelligence, Pre-Match Vault, score essenziale, news e classifiche senza API a pagamento.",
+  "description": "Calendario globale, XI Intelligence e Pre-Match Vault senza API a pagamento.",
   "scripts": {
     "start": "node server.js",
     "dev": "node server.js",

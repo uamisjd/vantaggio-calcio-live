@@ -1,4 +1,4 @@
-# VANTAGGIO 4.8.0 — XI Intelligence + Pre-Match Vault
+# VANTAGGIO 4.8.1 — XI Intelligence + Pre-Match Vault
 
 Portale calcistico responsive in italiano che unisce calendario globale, score essenziale, probabilità e **Pre-Match Total Intelligence** in un’identità ibrida esclusiva: regia broadcast, data room e magazine editoriale. Funziona senza API a pagamento, senza account utente e senza dipendenze npm.
 
@@ -12,6 +12,14 @@ Portale calcistico responsive in italiano che unisce calendario globale, score e
 - **Preferiti / My Matchroom**: countdown, prossimo evento, dossier consultati, alert e privacy locale.
 - **Scout Search**: ricerca trasversale di partite, squadre, competizioni e notizie con navigazione da tastiera.
 - **Match dossier / Control Room**: un’unica architettura adattiva raggruppa Sintesi, Squadre, Numeri e Verifiche; il Power Model vive soltanto nell’area Numeri.
+
+## Global Calendar Hardening V4.8.1
+
+- **Copertura giornaliera ampliata**: il calendario globale riconosce 62 competizioni con identità stabile e mantiene anche tornei competitivi nuovi con l’etichetta pubblicata dal provider.
+- **Niente falso “poche partite”**: Primeira Liga, Eredivisie, Championship, LaLiga 2, Ligue 2, 2. Bundesliga, Coppa Italia, Süper Lig, campionati sudamericani e altri tornei gratuiti non vengono più scartati dal filtro globale.
+- **Amichevoli senza rumore**: le amichevoli club entrano soltanto quando coinvolgono almeno una grande squadra; il calcio universitario non pertinente resta escluso.
+- **Programma più trasparente**: la Regia è ora etichettata “Prossime”; il pannello di oggi dichiara separatamente totale, gare da giocare e risultati conclusi. Scegliendo una data si vede il programma completo.
+- **Scoperta a costo zero**: restano tre sole richieste globali — ieri, oggi e domani — oltre alle competizioni principali nel periodo esteso.
 
 ## XI Intelligence + Pre-Match Vault V4.8
 
@@ -161,7 +169,7 @@ Le fonti possono essere parziali o cambiare formato. Il backend normalizza i dat
 - disponibilità FPL cache 30 minuti, injury feed 20 minuti, rassegna availability 15 minuti;
 - snapshot tecnici recenti: massimo tre eventi per squadra, cache 30 minuti;
 - endpoint leggeri per partite, classifiche, notizie e stato servizio;
-- asset statici con versionamento cache `4.8.0`; cambio data automatico a mezzanotte nel fuso Europe/Rome.
+- asset statici con versionamento cache `4.8.1`; cambio data automatico a mezzanotte nel fuso Europe/Rome.
 
 ## Pubblicazione con URL stabile
 
@@ -185,7 +193,7 @@ npm test
 npm run audit
 ```
 
-I test verificano homepage e asset V4.8.0, tutte le viste frontend, Match Control Room, Pre-Match Total Intelligence, XI probabile/ufficiale, punteggi separati, assenze documentate, Pre-Match Vault, congelamento e blocco post-hoc, Readiness Gate, Evidence Map, Signal Lifecycle, checkpoint T-60/T-30/T-10, delta e riconciliazione, navigazione ARIA, assenza di notifiche e ricalcoli live, fallback trasparente, Model Track Record, Source Health Center, Availability Intelligence, Deep Match Review, classifiche, Reliability Ledger e Team DNA. L’audit esteso conta dinamicamente tutti i controlli eseguiti.
+I test verificano homepage e asset V4.8.1, tutte le viste frontend, Match Control Room, Pre-Match Total Intelligence, XI probabile/ufficiale, punteggi separati, assenze documentate, Pre-Match Vault, congelamento e blocco post-hoc, Readiness Gate, Evidence Map, Signal Lifecycle, checkpoint T-60/T-30/T-10, delta e riconciliazione, navigazione ARIA, assenza di notifiche e ricalcoli live, fallback trasparente, Model Track Record, Source Health Center, Availability Intelligence, Deep Match Review, classifiche, Reliability Ledger e Team DNA. L’audit esteso conta dinamicamente tutti i controlli eseguiti.
 
 ## Struttura
 

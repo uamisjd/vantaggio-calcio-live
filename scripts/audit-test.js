@@ -26,13 +26,13 @@ function noInvalidNumbers(value) {
 (async () => {
   const home = await request('/', 'text');
   check(home.response.status === 200, 'Homepage HTTP 200');
-  check(home.body.includes('V4.8') && home.body.includes('app.js?v=4.8.0'), 'Homepage V4.8.0 e cache key corrette');
+  check(home.body.includes('V4.8') && home.body.includes('app.js?v=4.8.1'), 'Homepage V4.8.1 e cache key corrette');
   check(home.response.headers.get('x-content-type-options') === 'nosniff', 'Header nosniff presente');
   check(home.response.headers.get('referrer-policy') === 'strict-origin-when-cross-origin', 'Referrer policy sicura presente');
 
   const [manifest, favicon, app, css, status] = await Promise.all([
-    request('/manifest.webmanifest'), request('/favicon.svg', 'text'), request('/app.js?v=4.8.0', 'text'),
-    request('/styles.css?v=4.8.0', 'text'), request('/api/status')
+    request('/manifest.webmanifest'), request('/favicon.svg', 'text'), request('/app.js?v=4.8.1', 'text'),
+    request('/styles.css?v=4.8.1', 'text'), request('/api/status')
   ]);
   check(manifest.response.status === 200 && manifest.body?.start_url === '/#dashboard' && manifest.body?.display === 'standalone', 'Manifest PWA valido');
   check(favicon.response.status === 200 && favicon.body.includes('<svg'), 'Favicon SVG valida');
@@ -40,7 +40,7 @@ function noInvalidNumbers(value) {
   check(app.body.includes('MATCH CONTROL ROOM') && app.body.includes('MATCH READINESS GATE') && app.body.includes('EVIDENCE MAP'), 'Control Room, Readiness Gate ed Evidence Map presenti');
   check(app.body.includes('PRE-MATCH TOTAL INTELLIGENCE') && app.body.includes('prematchTotalIntelligence') && app.body.includes('data-prematch-jump'), 'Manifesto Pre-Match Total Intelligence presente');
   check(app.body.includes('contextDateConflict') && app.body.includes('Metadato contraddittorio'), 'Contraddizioni fra fase e data dichiarate');
-  check(app.body.includes('PRE-MATCH WINDOW') && app.body.includes('DOSSIER PRE-MATCH') && !app.body.includes('LIVE PULSE') && !app.body.includes('LIVE CONTROL'), 'Dashboard e calendario centrati sul prematch');
+  check(app.body.includes('PRE-MATCH WINDOW') && app.body.includes('PROGRAMMA DI OGGI') && app.body.includes('scegli “Oggi”') && !app.body.includes('LIVE PULSE') && !app.body.includes('LIVE CONTROL'), 'Dashboard prematch e calendario giornaliero trasparente');
   check(!app.body.includes('function notifyLive') && !app.body.includes("addChange('live'") && app.body.includes('Analisi live disattivata'), 'Nessun segnale, notifica o analisi ricalcolata durante il live');
   check(app.body.includes('PRE-MATCH VAULT') && app.body.includes('vantaggio:prematchVault:v1') && app.body.includes('archivedPrematchData(match)'), 'Pre-Match Vault locale e dossier congelato presenti');
   check(app.body.includes('Fotografia al salvataggio prematch') && app.body.includes('non descrive la situazione live') && app.body.includes('Timeline non osservata prima del kickoff'), 'Timestamp ed evidenze archiviate non presentate come ricerca corrente');
@@ -55,11 +55,13 @@ function noInvalidNumbers(value) {
   check(css.response.status === 200 && css.body.includes('@media (max-width: 720px)'), 'CSS responsive servito');
   check(css.body.includes('.match-room-tabs') && css.body.includes('.readiness-gate') && css.body.includes('.evidence-map'), 'Design system Control Room servito');
   check(css.body.includes('.signal-lifecycle') && css.body.includes('.lifecycle-card'), 'Timeline Signal Lifecycle responsive servita');
+  check(app.body.includes('matchingMatches.slice(0, 100)') && app.body.includes('calendar-limit-note'), 'Regia globale limitata per prestazioni con giornate complete accessibili');
   check(css.body.includes('.prematch-total-intelligence') && css.body.includes('.prematch-manifest') && css.body.includes('.score-only-live'), 'Design system Pre-Match Total Intelligence servito');
   check(css.body.includes('.xi-intelligence') && css.body.includes('.xi-team-grid') && css.body.includes('.prematch-vault-banner'), 'Design responsive XI Intelligence e Pre-Match Vault servito');
   check(app.response.headers.get('cache-control')?.includes('immutable') && css.response.headers.get('cache-control')?.includes('immutable'), 'Asset versionati serviti con cache immutabile');
   check(status.response.status === 200 && status.body?.ok && status.body.timezone === 'Europe/Rome', 'Status API e timezone validi');
   check(Array.isArray(status.body?.standingsLeagues) && status.body.standingsLeagues.length >= 12, 'Catalogo classifiche estese valido');
+  check(Array.isArray(status.body?.globalCompetitions) && status.body.globalCompetitions.length >= 40 && status.body.globalPolicy?.includes('competitivo globale'), 'Catalogo competitivo globale esteso e policy dichiarata');
 
   const today = status.body.today;
   const day = new Date(`${today}T12:00:00Z`);

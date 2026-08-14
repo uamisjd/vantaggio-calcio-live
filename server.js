@@ -38,7 +38,7 @@ const BIG_CLUBS = new Set([
   'internazionale', 'inter milan', 'ac milan', 'juventus', 'napoli', 'roma', 'lazio', 'atalanta',
   'manchester city', 'manchester united', 'liverpool', 'arsenal', 'chelsea', 'tottenham hotspur',
   'real madrid', 'barcelona', 'atlético madrid', 'atletico madrid', 'bayern munich', 'borussia dortmund',
-  'paris saint-germain', 'paris fc', 'marseille', 'benfica', 'fc porto', 'sporting cp',
+  'paris saint-germain', 'paris fc', 'marseille', 'as monaco', 'monaco', 'athletic club', 'benfica', 'fc porto', 'sporting cp',
   'inter miami cf', 'américa', 'cruz azul', 'besiktas', 'partizan belgrade', 'santos', 'flamengo',
   'palmeiras', 'river plate', 'boca juniors', 'al hilal', 'al nassr'
 ]);
@@ -46,22 +46,74 @@ const BIG_CLUBS = new Set([
 // Competizioni rilevanti presenti nel calendario globale ESPN. La chiave è
 // l'identificativo numerico incluso nell'UID degli eventi globali.
 const GLOBAL_COMPETITIONS = {
+  '630': { id: 'bra.1', label: 'Brasileirão', country: 'Brasile', accent: '#50bd68', weight: 13 },
+  '700': { id: 'eng.1', label: 'Premier League', country: 'Inghilterra', accent: '#b764ff', weight: 18 },
+  '710': { id: 'fra.1', label: 'Ligue 1', country: 'Francia', accent: '#37d39a', weight: 13 },
+  '720': { id: 'ger.1', label: 'Bundesliga', country: 'Germania', accent: '#ff4058', weight: 14 },
+  '730': { id: 'ita.1', label: 'Serie A', country: 'Italia', accent: '#2f7cff', weight: 16 },
+  '740': { id: 'esp.1', label: 'LaLiga', country: 'Spagna', accent: '#ff6a55', weight: 15 },
+  '760': { id: 'mex.1', label: 'Liga MX', country: 'Messico', accent: '#d35b76', weight: 12 },
+  '770': { id: 'usa.1', label: 'MLS', country: 'Stati Uniti', accent: '#5c9de6', weight: 12 },
+  '620': { id: 'bol.1', label: 'Liga Profesional Bolivia', country: 'Bolivia', accent: '#54b9a8', weight: 8 },
+  '640': { id: 'chi.1', label: 'Primera División Cile', country: 'Cile', accent: '#d95c68', weight: 10 },
+  '650': { id: 'col.1', label: 'Primera A Colombia', country: 'Colombia', accent: '#f3c849', weight: 11 },
+  '660': { id: 'ecu.1', label: 'LigaPro Ecuador', country: 'Ecuador', accent: '#f0b84c', weight: 10 },
+  '670': { id: 'per.1', label: 'Liga 1 Perù', country: 'Perù', accent: '#e26068', weight: 9 },
+  '680': { id: 'uru.1', label: 'Primera División Uruguay', country: 'Uruguay', accent: '#6fbce9', weight: 10 },
+  '715': { id: 'por.1', label: 'Primeira Liga', country: 'Portogallo', accent: '#5bc87a', weight: 15 },
+  '725': { id: 'ned.1', label: 'Eredivisie', country: 'Paesi Bassi', accent: '#ff8a4c', weight: 14 },
+  '745': { id: 'arg.1', label: 'Liga Profesional Argentina', country: 'Argentina', accent: '#74bde8', weight: 13 },
+  '750': { id: 'jpn.1', label: 'J1 League', country: 'Giappone', accent: '#dc5165', weight: 12 },
+  '783': { id: 'conmebol.libertadores', label: 'Copa Libertadores', country: 'Sud America', accent: '#d9b85b', weight: 23 },
+  '3901': { id: 'bel.1', label: 'Pro League Belgio', country: 'Belgio', accent: '#d9a52e', weight: 13 },
+  '3903': { id: 'arg.2', label: 'Primera Nacional Argentina', country: 'Argentina', accent: '#79a8dc', weight: 8 },
+  '3904': { id: 'arg.3', label: 'Primera B Argentina', country: 'Argentina', accent: '#81a7d3', weight: 6 },
+  '3907': { id: 'aut.1', label: 'Bundesliga Austria', country: 'Austria', accent: '#d85d67', weight: 11 },
+  '3913': { id: 'den.1', label: 'Superliga Danimarca', country: 'Danimarca', accent: '#6c8dd9', weight: 11 },
+  '3914': { id: 'eng.2', label: 'Championship', country: 'Inghilterra', accent: '#9b6de3', weight: 13 },
+  '3915': { id: 'eng.3', label: 'League One', country: 'Inghilterra', accent: '#8c77cf', weight: 9 },
+  '3916': { id: 'eng.4', label: 'League Two', country: 'Inghilterra', accent: '#7e86c8', weight: 8 },
+  '3917': { id: 'eng.5', label: 'National League', country: 'Inghilterra', accent: '#748cb8', weight: 6 },
+  '3921': { id: 'esp.2', label: 'LaLiga 2', country: 'Spagna', accent: '#e97856', weight: 11 },
+  '3926': { id: 'fra.2', label: 'Ligue 2', country: 'Francia', accent: '#43bf96', weight: 10 },
+  '3927': { id: 'ger.2', label: '2. Bundesliga', country: 'Germania', accent: '#e45b65', weight: 11 },
+  '3928': { id: 'gua.1', label: 'Liga Nacional Guatemala', country: 'Guatemala', accent: '#62a0d1', weight: 7 },
+  '3929': { id: 'hon.1', label: 'Liga Nacional Honduras', country: 'Honduras', accent: '#668fc9', weight: 7 },
+  '3932': { id: 'mex.2', label: 'Liga de Expansión MX', country: 'Messico', accent: '#d65c70', weight: 9 },
+  '3933': { id: 'ned.2', label: 'Keuken Kampioen Divisie', country: 'Paesi Bassi', accent: '#e69052', weight: 8 },
+  '3934': { id: 'par.1', label: 'Primera División Paraguay', country: 'Paraguay', accent: '#72a7dc', weight: 8 },
+  '3937': { id: 'rsa.1', label: 'Premiership Sudafrica', country: 'Sudafrica', accent: '#d9a84f', weight: 9 },
+  '3939': { id: 'rus.1', label: 'Premier League Russia', country: 'Russia', accent: '#6f8fd5', weight: 10 },
+  '3943': { id: 'slv.1', label: 'Primera División El Salvador', country: 'El Salvador', accent: '#67a9d8', weight: 7 },
+  '3945': { id: 'swe.1', label: 'Allsvenskan', country: 'Svezia', accent: '#e1bd4f', weight: 10 },
+  '3946': { id: 'tur.1', label: 'Süper Lig', country: 'Turchia', accent: '#ef5665', weight: 13 },
+  '3949': { id: 'ven.1', label: 'Liga FUTVE', country: 'Venezuela', accent: '#d6a64f', weight: 8 },
+  '3956': { id: 'ita.coppa_italia', label: 'Coppa Italia', country: 'Italia', accent: '#4e8ce1', weight: 18 },
+  '3960': { id: 'nor.1', label: 'Eliteserien', country: 'Norvegia', accent: '#658dd8', weight: 10 },
+  '4002': { id: 'usa.usl', label: 'USL Championship', country: 'Stati Uniti', accent: '#627fc2', weight: 8 },
+  '4005': { id: 'crc.1', label: 'Primera División Costa Rica', country: 'Costa Rica', accent: '#6fb68c', weight: 8 },
+  '4007': { id: 'bra.2', label: 'Brasileirão Série B', country: 'Brasile', accent: '#65b96f', weight: 10 },
+  '5454': { id: 'conmebol.sudamericana', label: 'Copa Sudamericana', country: 'Sud America', accent: '#ee7d45', weight: 19 },
+  '5462': { id: 'uefa.super_cup', label: 'Supercoppa UEFA', country: 'Europa', accent: '#8da2ff', weight: 25 },
+  '8301': { id: 'usa.nwsl', label: 'NWSL', country: 'Stati Uniti', accent: '#8b72d8', weight: 11 },
+  '8313': { id: 'col.copa', label: 'Copa Colombia', country: 'Colombia', accent: '#e8bb48', weight: 12 },
+  '8376': { id: 'chn.1', label: 'Chinese Super League', country: 'Cina', accent: '#dc5b65', weight: 10 },
   '19425': { id: 'concacaf.leagues.cup', label: 'Leagues Cup', country: 'Nord America', accent: '#44d6bd', weight: 19 },
+  '19915': { id: 'usa.usl.one', label: 'USL League One', country: 'Stati Uniti', accent: '#6676b8', weight: 6 },
   '19887': { id: 'uefa.europa_qual', label: 'Qualificazioni Europa League', country: 'Europa', accent: '#ff9f43', weight: 21 },
   '20221': { id: 'uefa.europa.conf_qual', label: 'Qualificazioni Conference', country: 'Europa', accent: '#6bdc7d', weight: 17 },
-  '783': { id: 'conmebol.libertadores', label: 'Copa Libertadores', country: 'Sud America', accent: '#d9b85b', weight: 23 },
-  '5454': { id: 'conmebol.sudamericana', label: 'Copa Sudamericana', country: 'Sud America', accent: '#ee7d45', weight: 19 },
   '21231': { id: 'ksa.1', label: 'Saudi Pro League', country: 'Arabia Saudita', accent: '#62ca74', weight: 12 },
-  '3932': { id: 'mex.2', label: 'Liga de Expansión MX', country: 'Messico', accent: '#d65c70', weight: 9 },
-  '8313': { id: 'col.1', label: 'Primera A Colombia', country: 'Colombia', accent: '#f3c849', weight: 11 },
   '22947': { id: 'pan.1', label: 'Liga Panamense', country: 'Panama', accent: '#5d91e8', weight: 8 },
-  '5462': { id: 'uefa.super_cup', label: 'Supercoppa UEFA', country: 'Europa', accent: '#8da2ff', weight: 25 }
+  '23286': { id: 'can.nsl', label: 'Northern Super League', country: 'Canada', accent: '#7c78c8', weight: 7 },
+  '23523': { id: 'caf.womens', label: 'Coppa d’Africa femminile', country: 'Africa', accent: '#d6a052', weight: 11 },
+  '23633': { id: 'usa.usl.super', label: 'USL Super League', country: 'Stati Uniti', accent: '#8a72c8', weight: 7 },
+  '5672': { id: 'asean.championship', label: 'ASEAN Championship', country: 'Asia', accent: '#5aa69a', weight: 10 }
 };
 
 const ANALYSIS_LEAGUES = new Set([
   ...Object.keys(LEAGUES),
   ...Object.values(GLOBAL_COMPETITIONS).map(item => item.id),
-  'uefa.champions_qual', 'uefa.super_cup', 'uefa.europa.conf', 'ita.coppa_italia',
+  'uefa.champions_qual', 'uefa.super_cup', 'uefa.europa.conf', 'ita.coppa_italia', 'club.friendly',
   'eng.2', 'ita.2', 'por.1', 'ned.1', 'tur.1', 'bel.1', 'sco.1', 'usa.1', 'mex.1', 'arg.1', 'bra.1'
 ]);
 
@@ -276,12 +328,28 @@ function eventLeagueNumericId(event) {
   return String(event.uid || '').match(/~l:([^~]+)/)?.[1] || '';
 }
 
+function globalCompetitionForEvent(event) {
+  const numericId = eventLeagueNumericId(event);
+  if (!/^\d+$/.test(numericId)) return null;
+  if (GLOBAL_COMPETITIONS[numericId]) return GLOBAL_COMPETITIONS[numericId];
+  const providerLabel = String(event.competitions?.[0]?.altGameNote || '').trim();
+  if (!providerLabel) return null;
+  if (/NCAAW Soccer/i.test(providerLabel)) return null;
+  if (/Club Friendly/i.test(providerLabel)) {
+    const teams = (event.competitions?.[0]?.competitors || []).map(item => String(item.team?.displayName || item.team?.shortDisplayName || '').toLowerCase());
+    const priority = teams.some(name => [...BIG_CLUBS].some(club => name === club || name.includes(club)));
+    return priority ? { id: 'club.friendly', label: 'Amichevoli club · grandi squadre', country: 'Internazionale', accent: '#8d9aaa', weight: 4 } : null;
+  }
+  const accents = ['#5d91e8', '#54b9a8', '#d9a52e', '#8b72d8', '#e97856', '#65b96f'];
+  return { id: `global.${numericId}`, label: providerLabel, country: 'Calendario globale', accent: accents[Number(numericId) % accents.length], weight: 7 };
+}
+
 async function getGlobalMatches(date) {
   const compactDate = date.replaceAll('-', '');
   const url = `https://site.api.espn.com/apis/site/v2/sports/soccer/all/scoreboard?dates=${compactDate}&limit=1000`;
   const json = await fetchJson(url, 14_000);
   return (json.events || [])
-    .map(event => ({ event, league: GLOBAL_COMPETITIONS[eventLeagueNumericId(event)] }))
+    .map(event => ({ event, league: globalCompetitionForEvent(event) }))
     .filter(item => item.league)
     .map(item => normalizeEvent(item.event, item.league));
 }
@@ -838,7 +906,7 @@ function normalizeKeyEvents(summary) {
 
 async function getAnalysis(eventId, leagueId, force = false) {
   if (!/^\d{5,15}$/.test(String(eventId))) throw new Error('Evento non valido');
-  if (!ANALYSIS_LEAGUES.has(leagueId)) throw new Error('Competizione non supportata per l’analisi avanzata');
+  if (!ANALYSIS_LEAGUES.has(leagueId) && !/^global\.\d+$/.test(leagueId)) throw new Error('Competizione non supportata per l’analisi avanzata');
   return cached(`analysis:v2:${leagueId}:${eventId}`, 5 * 60_000, async () => {
     const summary = await fetchEventSummary(eventId, leagueId);
     const competition = summary.header?.competitions?.[0] || {};
@@ -1909,7 +1977,9 @@ const server = http.createServer(async (req, res) => {
           today: romeDate(),
           timezone: 'Europe/Rome',
           leagues: Object.values(LEAGUES),
-          standingsLeagues: Object.values(STANDINGS_LEAGUES)
+          standingsLeagues: Object.values(STANDINGS_LEAGUES),
+          globalCompetitions: Object.values(GLOBAL_COMPETITIONS),
+          globalPolicy: 'Calendario competitivo globale di ieri, oggi e domani; amichevoli limitate alle grandi squadre e competizioni non ancora catalogate mantenute con etichetta provider.'
         });
       }
       if (pathname === '/api/matches') {

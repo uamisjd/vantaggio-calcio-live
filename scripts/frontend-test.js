@@ -55,7 +55,7 @@ function createNode() {
   context.globalThis = context;
 
   let source = fs.readFileSync('public/app.js', 'utf8').replace(/\ninit\(\);\s*$/, '\n');
-  source += '\nglobalThis.__test={state,safeUrl,teamLogo,newsCard,matchRow,renderDashboard,renderMatchesView,renderRadarView,renderNewsView,renderStandingsView,renderFavoritesView,renderIntelligence,renderFallbackDeepAnalysis,renderPowerAnalysis,lineupIntel,archivePreKickoffModel,reconcileModelSnapshots,modelTrackStats,readinessAssessment,contextDateConflict,captureSignalLifecycle,reconcileSignalLifecycles,capturePrematchVault,archivedPrematchData,renderPrematchVault};';
+  source += '\nglobalThis.__test={state,localDateKey,safeUrl,teamLogo,newsCard,matchRow,renderDashboard,renderMatchesView,renderRadarView,renderNewsView,renderStandingsView,renderFavoritesView,renderIntelligence,renderFallbackDeepAnalysis,renderPowerAnalysis,lineupIntel,archivePreKickoffModel,reconcileModelSnapshots,modelTrackStats,readinessAssessment,contextDateConflict,captureSignalLifecycle,reconcileSignalLifecycles,capturePrematchVault,archivedPrematchData,renderPrematchVault};';
   vm.runInNewContext(source, context, { filename: 'public/app.js' });
   const test = context.__test;
   test.state.today = status.today;
@@ -115,7 +115,14 @@ function createNode() {
   if (!renders.roomVerify.includes('EVIDENCE MAP') || !renders.roomVerify.includes('What Changed · storia della partita') || !renders.roomVerify.includes('Data Reliability Ledger') || !renders.roomVerify.includes('Fonti e news collegate')) throw new Error('Area Verifiche non valida');
   if (!renders.dashboard.includes('MODEL TRACK RECORD') || !renders.dashboard.includes('SOURCE HEALTH CENTER')) throw new Error('Track Record o Source Health Center non renderizzati');
   if (!renders.dashboard.includes('PRE-MATCH WINDOW') || renders.dashboard.includes('LIVE PULSE')) throw new Error('Dashboard non centrata sul prematch');
-  if (!renders.matches.includes('DOSSIER PRE-MATCH') || renders.matches.includes('LIVE CONTROL')) throw new Error('Calendario ancora orientato al live');
+  if (!renders.matches.includes('PROGRAMMA DI OGGI') || !renders.matches.includes('da giocare') || !renders.matches.includes('concluse') || !renders.matches.includes('Prossime') || renders.matches.includes('LIVE CONTROL')) throw new Error('Calendario giornaliero non trasparente o ancora orientato al live');
+  const futureCount = test.state.matches.filter(match => match.state === 'in' || (match.state === 'pre' && new Date(match.date).getTime() > Date.now() - 3 * 3600000)).length;
+  if (futureCount > 100 && !renders.matches.includes('calendar-limit-note')) throw new Error('La Regia globale non dichiara il limite prestazionale');
+  test.state.selectedDate = status.today;
+  const completeToday = test.renderMatchesView();
+  const expectedToday = test.state.matches.filter(match => test.localDateKey(match.date) === status.today).length;
+  if ((completeToday.match(/class="match-row/g) || []).length !== expectedToday || completeToday.includes('calendar-limit-note')) throw new Error('Il filtro Oggi non mostra il programma giornaliero completo');
+  test.state.selectedDate = 'all';
   if (!renders.postDossier.includes('REVIEW') || !renders.postDossier.includes('Decisione chiusa') || !renders.fallback.includes('COPERTURA RIDOTTA')) throw new Error('Review adattiva o fallback trasparente non renderizzato');
   const inProgressIntel = { ...intelligencePayload.data, event: { ...intelligencePayload.data.event, state: 'in', home: { ...intelligencePayload.data.event.home, score: 1 }, away: { ...intelligencePayload.data.event.away, score: 0 } } };
   const scoreOnly = test.renderIntelligence(inProgressIntel);
@@ -203,7 +210,7 @@ function createNode() {
   if (Object.keys(test.state.prematchVault).length !== 10) throw new Error('Fallback quota del Vault non riduce la conservazione a 10 partite');
 
   const css = fs.readFileSync('public/styles.css', 'utf8');
-  for (const marker of ['@media (max-width: 720px)', '@media (max-width: 420px)', 'prefers-reduced-motion', '.deep-dive.fallback', '.preseason-reading', '.operations-deck', '.availability-desk', '.match-history', '.match-control-room', '.match-room-tabs', '.readiness-gate', '.evidence-map', '.signal-lifecycle', '.lifecycle-card', '.prematch-total-intelligence', '.prematch-manifest', '.score-only-live', '.xi-intelligence', '.xi-team-grid', '.prematch-vault-banner', '.deep-story p { margin: 0; color: var(--muted); font-size: 10.5px;']) {
+  for (const marker of ['@media (max-width: 720px)', '@media (max-width: 420px)', 'prefers-reduced-motion', '.deep-dive.fallback', '.preseason-reading', '.operations-deck', '.availability-desk', '.match-history', '.match-control-room', '.match-room-tabs', '.readiness-gate', '.evidence-map', '.signal-lifecycle', '.lifecycle-card', '.prematch-total-intelligence', '.prematch-manifest', '.score-only-live', '.xi-intelligence', '.xi-team-grid', '.prematch-vault-banner', '.calendar-limit-note', '.deep-story p { margin: 0; color: var(--muted); font-size: 10.5px;']) {
     if (!css.includes(marker)) throw new Error(`Regola CSS mancante: ${marker}`);
   }
   console.log('Frontend test completato: viste, dossier, URL, fallback grafici e pre-season validi.');
