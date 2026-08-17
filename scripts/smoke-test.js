@@ -10,11 +10,12 @@ async function get(path, type = 'json') {
 
 (async () => {
   const html = await get('/', 'text');
-  if (!html.includes('VANTAGGIO') || !html.includes('V4.9') || !html.includes('/app.js?v=4.9.0') || !html.includes('/styles.css?v=4.9.0')) throw new Error('Homepage o asset V4.9.0 non validi');
-  const [appJs, styles] = await Promise.all([get('/app.js?v=4.9.0', 'text'), get('/styles.css?v=4.9.0', 'text')]);
+  if (!html.includes('VANTAGGIO') || !html.includes('V4.9') || !html.includes('/app.js?v=4.9.1') || !html.includes('/styles.css?v=4.9.1')) throw new Error('Homepage o asset V4.9.1 non validi');
+  const [appJs, styles] = await Promise.all([get('/app.js?v=4.9.1', 'text'), get('/styles.css?v=4.9.1', 'text')]);
   const v4Modules = ['DAILY BRIEFING', 'PRE-MATCH COMMAND', 'SIGNAL STUDIO', 'VANTAGGIO NEWSROOM', 'TABLE LAB', 'MY MATCHROOM', 'SCOUT SEARCH', 'WHAT CHANGED DESK', 'KICKOFF WATCH', 'TEAM DNA', 'RELIABILITY LEDGER', 'MATCH ARCHIVE', 'MODEL TRACK RECORD', 'SOURCE HEALTH CENTER', 'AVAILABILITY INTELLIGENCE'];
   const dossierFirst = ['MATCH CONTROL ROOM', 'PRE-MATCH TOTAL INTELLIGENCE', 'prematchTotalIntelligence', 'renderFallbackDeepAnalysis', 'readinessGate', 'EVIDENCE MAP', 'SIGNAL LIFECYCLE', 'captureSignalLifecycle', 'COPERTURA RIDOTTA', 'XI INTELLIGENCE', 'PRE-MATCH VAULT', 'capturePrematchVault'];
-  if (!v4Modules.every(module => appJs.includes(module)) || !dossierFirst.every(module => appJs.includes(module)) || !styles.includes('V4.8 · XI Intelligence + Pre-Match Vault') || !styles.includes('.prematch-total-intelligence') || !styles.includes('.xi-intelligence') || !styles.includes('.prematch-vault-banner') || !styles.includes('.deep-dive.fallback')) throw new Error('Moduli esperienza V4.8 incompleti');
+  const ledgerV2 = ['DATA RELIABILITY LEDGER', 'DATA READINESS', 'reliability-dimensions', 'PRIORITÀ PRIMA DEL KICKOFF', 'Prova mancante', 'gate evidenze'];
+  if (!v4Modules.every(module => appJs.includes(module)) || !dossierFirst.every(module => appJs.includes(module)) || !ledgerV2.every(module => appJs.includes(module)) || !styles.includes('V4.8 · XI Intelligence + Pre-Match Vault') || !styles.includes('V4.9.1 · Reliability Ledger') || !styles.includes('.reliability-row.status-critical') || !styles.includes('.prematch-total-intelligence') || !styles.includes('.xi-intelligence') || !styles.includes('.prematch-vault-banner') || !styles.includes('.deep-dive.fallback')) throw new Error('Moduli esperienza V4.9.1 incompleti');
   if (appJs.includes('class="broadcast-strip"') || appJs.includes('function newsroomPreview') || appJs.includes('SIGNAL LEDGER') || styles.includes('.broadcast-strip') || styles.includes('.signal-ledger')) throw new Error('Componenti ridondanti ancora attivi');
   const modalSource = appJs.slice(appJs.indexOf('function openMatch'), appJs.indexOf('function renderFallbackDeepAnalysis'));
   const summarySource = appJs.slice(appJs.indexOf('function matchRoomSummary'), appJs.indexOf('function matchRoomTeams'));
@@ -55,7 +56,7 @@ async function get(path, type = 'json') {
 
   const intelligence = await get(`/api/intelligence?event=${encodeURIComponent(analyzable.id)}&league=${encodeURIComponent(analyzable.league.id)}`);
   const intel = intelligence.data;
-  if (!intelligence.ok || intel.engine?.version !== '1.3' || !intel.event || !intel.context || !intel.calendar || !intel.tactical || !intel.reliability || !intel.deepDive || !Array.isArray(intel.deepDive.paragraphs) || !intel.deepDive.paragraphs.length) throw new Error('Match Intelligence API non valida');
+  if (!intelligence.ok || intel.engine?.version !== '1.4' || !intel.event || !intel.context || !intel.calendar || !intel.tactical || !intel.reliability || !intel.deepDive || !Array.isArray(intel.deepDive.paragraphs) || !intel.deepDive.paragraphs.length) throw new Error('Match Intelligence API non valida');
   const xi = intel.lineupIntelligence;
   if (!xi || !['ufficiale', 'probabili_parziali', 'non_disponibile'].includes(xi.status) || !Array.isArray(xi.teams) || xi.teams.length !== 2 || !xi.rule?.includes('Non sono probabilità di vittoria')) throw new Error('XI Intelligence non valida');
   if (!xi.teams.every(team => ['ufficiale', 'probabile', 'non_disponibile'].includes(team.mode) && Array.isArray(team.selected) && Array.isArray(team.importantMissing) && Array.isArray(team.omissions) && (team.mode === 'non_disponibile' ? team.confidence === null && team.strength === null : Number.isFinite(team.confidence) && Number.isFinite(team.strength)))) throw new Error('Punteggi o classificazioni XI non validi');
@@ -65,6 +66,14 @@ async function get(path, type = 'json') {
   if (!Number.isFinite(intel.availability.score) || !Array.isArray(intel.availability.teams) || intel.availability.teams.length !== 2 || !Array.isArray(intel.availability.sources) || !intel.availability.rule?.includes('silenzio')) throw new Error('Availability Intelligence non valida');
   if (typeof intel.tactical.home?.observedGames !== 'number' || typeof intel.tactical.away?.observedGames !== 'number') throw new Error('Campione tattico non dichiarato');
   if (!Number.isFinite(intel.reliability.overall) || !Array.isArray(intel.reliability.items) || intel.reliability.items.length < 5) throw new Error('Reliability Ledger non valido');
+  const ledger = intel.reliability;
+  if (ledger.schemaVersion !== '2.0' || !['ready', 'caution', 'hold'].includes(ledger.readiness?.state) || !['Solida', 'Discreta', 'Parziale', 'Insufficiente'].includes(ledger.level) || !ledger.scoreMeaning?.includes('provenienza')) throw new Error('Reliability Ledger V2 o Data Readiness non validi');
+  if (!ledger.items.every(item => Number.isFinite(item.score) && Number.isFinite(item.dimensions?.provenance) && Number.isFinite(item.dimensions?.coverage) && Number.isFinite(item.dimensions?.freshness) && Array.isArray(item.missingEvidence) && item.impact && item.decisionImpact && item.nextCheck)) throw new Error('Dimensioni, vuoti o impatto del Reliability Ledger incompleti');
+  const lineupReliability = ledger.items.find(item => item.id === 'lineups');
+  const availabilityReliability = ledger.items.find(item => item.id === 'availability');
+  if (!lineupReliability || !availabilityReliability || availabilityReliability.label !== 'Copertura disponibilità rosa') throw new Error('Moduli critici del Reliability Ledger non validi');
+  if (!intel.lineups.official && ((ledger.minutesToKickoff <= 75 && lineupReliability.status !== 'critical') || (ledger.minutesToKickoff > 75 && lineupReliability.status !== 'expected'))) throw new Error('Critical Evidence Gate temporale delle formazioni non valido');
+  if (ledger.items.some(item => item.critical) && ledger.readiness.state === 'ready') throw new Error('Le prove opzionali compensano impropriamente un vuoto critico');
 
   const premierMatch = matches.data.matches.find(item => item.league.id === 'eng.1' && item.state === 'pre' && new Date(item.date).getTime() > Date.now());
   let premierAvailability = null;
@@ -90,7 +99,7 @@ async function get(path, type = 'json') {
   const health = await get('/api/health');
   if (!Array.isArray(health.sources) || !health.sources.some(source => source.calls > 0 && source.lastSuccessAt) || !health.rule || health.resilience?.staleFallback !== 'bounded' || health.resilience?.circuitFailureThreshold !== 4) throw new Error('Source Health Center non valido');
 
-  console.log(`✓ Homepage V4.9.0 e asset cache serviti`);
+  console.log(`✓ Homepage V4.9.1 e asset cache serviti`);
   console.log(`✓ Dossier-first, fallback trasparente e componenti ridondanti rimossi`);
   console.log(`✓ ${matches.data.matches.length} partite in ${matches.data.coverage?.competitions || 0} competizioni`);
   console.log(`✓ Power Model 3.0 operativo su ${analyzable.home.name}–${analyzable.away.name}`);

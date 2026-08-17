@@ -6,6 +6,7 @@ const {
   cached,
   sourceHealthSnapshot,
   statisticalModel,
+  buildMatchReliability,
   memoryCache,
   sourceCircuits
 } = require('../server');
@@ -38,6 +39,32 @@ function recentFixture(days = [3, 12, 28, 48], venue = 'Casa') {
 
   const oldModel = statisticalModel(recentFixture([240, 280, 320, 360], 'Casa'), recentFixture([250, 290, 330, 370], 'Trasferta'));
   if (!(oldModel.diagnostics.effectiveSample < model.diagnostics.effectiveSample)) throw new Error('Il decadimento temporale non riduce il campione effettivo vecchio');
+
+  const reliabilityFixture = (minutesToKickoff, availabilityScore) => {
+    const generatedAt = new Date().toISOString();
+    const analysis = {
+      engine: { generatedAt }, event: { state: 'pre', date: new Date(Date.now() + minutesToKickoff * 60_000).toISOString() },
+      context: { phase: 'Regular Season', venue: { name: 'Stadio test' }, isTwoLeg: false }, lineups: { official: false }
+    };
+    const snapshots = [{ date: generatedAt }, { date: generatedAt }, { date: generatedAt }];
+    const tactical = { home: { observedGames: 3, snapshots }, away: { observedGames: 3, snapshots } };
+    const news = Array.from({ length: 6 }, (_, index) => ({ reliability: 'forte', published: generatedAt, title: `Fonte ${index}` }));
+    const availability = {
+      score: availabilityScore, message: availabilityScore >= 65 ? 'Copertura strutturata disponibile.' : 'Copertura strutturata incompleta.',
+      sources: [{ label: 'Fonte ufficiale test', state: 'disponibile', tier: 1, updatedAt: generatedAt }]
+    };
+    return buildMatchReliability(analysis, { restDays: 5 }, { restDays: 6 }, tactical, news, availability);
+  };
+  const earlyLedger = reliabilityFixture(180, 90);
+  const nearLedger = reliabilityFixture(45, 90);
+  const blockedLedger = reliabilityFixture(45, 24);
+  const lineupItem = ledger => ledger.items.find(item => item.id === 'lineups');
+  const availabilityItem = blockedLedger.items.find(item => item.id === 'availability');
+  if (lineupItem(earlyLedger)?.status !== 'expected' || earlyLedger.readiness.state !== 'ready') throw new Error('Le lineup troppo precoci non vengono trattate come evidenza attesa');
+  if (lineupItem(nearLedger)?.status !== 'critical' || nearLedger.readiness.state !== 'caution') throw new Error('Il gate temporale non rende critica la lineup vicino al kickoff');
+  if (blockedLedger.readiness.state !== 'hold' || blockedLedger.items.find(item => item.id === 'news')?.status !== 'solid') throw new Error('Le fonti opzionali compensano impropriamente due vuoti critici');
+  if (availabilityItem?.label !== 'Copertura disponibilità rosa' || !availabilityItem.critical || !Array.isArray(availabilityItem.missingEvidence)) throw new Error('La copertura disponibilità non espone criticità e prove mancanti');
+  if (!blockedLedger.items.every(item => Number.isFinite(item.dimensions?.provenance) && Number.isFinite(item.dimensions?.coverage) && Number.isFinite(item.dimensions?.freshness)) || blockedLedger.level === 'Buona') throw new Error('Le dimensioni o le etichette del Reliability Ledger V2 non sono valide');
 
   let upstreamCalls = 0;
   const upstream = http.createServer((req, res) => {
@@ -85,6 +112,7 @@ function recentFixture(days = [3, 12, 28, 48], venue = 'Casa') {
   if (!bounded) throw new Error('Una cache oltre il limite stale è stata servita');
 
   console.log('✓ Modello 3.0: recency, shrinkage, normalizzazione e low-score correction validi');
+  console.log('✓ Reliability Ledger V2: dimensioni separate, gate temporale e non-compensazione validi');
   console.log('✓ Resilienza: retry limitato, circuit breaker, recovery e stale bounded validi');
 })().catch(error => {
   console.error('Foundation test fallito:', error.message);

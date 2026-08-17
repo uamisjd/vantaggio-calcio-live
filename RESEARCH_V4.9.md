@@ -304,6 +304,33 @@ Registro locale e trasparente con:
 - asset versionati e cache immutabile;
 - suite syntax, smoke, frontend e audit tutte verdi prima del deploy.
 
+## 7.1 Addendum implementato V4.9.1 — Reliability Ledger
+
+La revisione del ledger applica una distinzione che il punteggio precedente nascondeva:
+
+1. **Provenienza** — autorevolezza e tracciabilità della fonte.
+2. **Copertura** — quota dell’informazione necessaria realmente presente.
+3. **Freschezza** — età dell’ultimo riscontro disponibile.
+
+Il campo storico `score` resta compatibile ed è calcolato come `35% provenienza + 40% copertura + 25% freschezza`, ma non determina da solo la possibilità di promuovere un segnale. Il nuovo **Critical Evidence Gate** valuta separatamente le evidenze essenziali. Una fonte autorevole può non aver ancora pubblicato gli XI; una notizia fresca può non coprire entrambe le rose; un buon boxscore storico non sostituisce un’assenza confermata. Per questo il gate applica le regole seguenti:
+
+- lineup ufficiali mancanti: stato atteso prima di T−75, critico da T−75 e dopo il kickoff previsto;
+- disponibilità rosa sotto 40 di copertura: criticità essenziale;
+- due criticità essenziali: `HOLD`; una criticità o una lacuna essenziale parziale: `CAUTION`; nessuna: `READY`;
+- news e altri moduli opzionali non possono compensare una criticità essenziale;
+- il Decision Passport finale usa lo stato più prudente tra Model Gate e Data Readiness.
+
+Ogni item V2 espone fonte, aggiornamento, tre dimensioni, stato testuale, criticità, prova mancante, impatto e prossimo controllo. Le etichette aggregate sono `Solida`, `Discreta`, `Parziale`, `Insufficiente`. L’interfaccia usa card espandibili native, semantica non dipendente dal solo colore e un layout Android impilato.
+
+Acceptance criteria aggiuntivi:
+
+- contratto compatibile con i consumer V4.9 tramite `overall`, `level`, `items[].score`, `source` e `note`;
+- `schemaVersion: "2.0"`, dimensioni e Data Readiness presenti su ogni dossier;
+- “Copertura disponibilità rosa” sostituisce l’etichetta generica su infortuni e squalifiche;
+- lineup non ancora dovute non vengono rappresentate come errore precoce;
+- lineup mancanti nella finestra critica sono visibili e abbassano il gate;
+- test automatici impediscono a moduli opzionali di trasformare in `READY` un dossier con prove critiche mancanti.
+
 ## 8. Fonti principali
 
 - Forecasting/calibration, studio Bundesliga 11 stagioni: https://journals.sagepub.com/doi/10.1177/22150218261416681

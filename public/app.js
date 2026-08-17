@@ -817,7 +817,7 @@ function renderDashboard() {
       <div class="briefing-grid">
         <article class="briefing-card prematch-brief"><span>PRE-MATCH WINDOW</span><strong>${nextPrematch ? `${nextPrematch.home.name}–${nextPrematch.away.name}` : 'Nessun kickoff imminente'}</strong><p>${nextPrematch ? `${displayDate(nextPrematch.date)} alle ${fmtTime.format(new Date(nextPrematch.date))}: apri il dossier totale prima del via.` : 'Il calendario si aggiorna quando le fonti pubblicano nuovi eventi.'}</p></article>
         <article class="briefing-card"><span>AGENDA PRE-MATCH</span><strong>${todayPrematch.length} da studiare oggi · ${in48h.length} entro 48h</strong><p>${busyCount ? `${busyLeague} è la competizione più presente con ${busyCount} incontri futuri.` : 'Il calendario prematch si amplia automaticamente.'}</p></article>
-        <article class="briefing-card intelligence-brief"><span>DECISION GATE</span><strong>${strongestDecision ? `${strongestDecision.label} · ${strongestDecision.title}` : featured ? 'Deep Analysis disponibile' : 'Analisi in preparazione'}</strong><p>${strongest ? `${strongest.match.home.name}–${strongest.match.away.name}, qualità ${strongest.analysis.engine.quality}/100${strongestDecision?.state === 'hold' ? ': il sistema si astiene.' : ` · ${strongest.analysis.signals?.[0]?.label || 'segnale in verifica'}.`}` : featured ? `Apri ${escapeHtml(featured.home.name)}–${escapeHtml(featured.away.name)} per il dossier con fonti, limiti e red flags.` : 'Il sistema sta selezionando le partite con il campione più leggibile.'}</p></article>
+        <article class="briefing-card intelligence-brief"><span>MODEL GATE</span><strong>${strongestDecision ? `${strongestDecision.label} · ${strongestDecision.title}` : featured ? 'Deep Analysis disponibile' : 'Analisi in preparazione'}</strong><p>${strongest ? `${strongest.match.home.name}–${strongest.match.away.name}, qualità ${strongest.analysis.engine.quality}/100${strongestDecision?.state === 'hold' ? ': il sistema si astiene.' : ` · ${strongest.analysis.signals?.[0]?.label || 'segnale in verifica'}.`}` : featured ? `Apri ${escapeHtml(featured.home.name)}–${escapeHtml(featured.away.name)} per il dossier con fonti, limiti e red flags.` : 'Il sistema sta selezionando le partite con il campione più leggibile.'}</p></article>
         <article class="briefing-card coverage-brief"><span>COVERAGE DESK</span><strong>${coveredCompetitions} competizioni monitorate</strong><p>Calendario globale, feed gratuiti e controlli di qualità senza abbonamenti.</p></article>
       </div>
     </section>
@@ -1066,9 +1066,44 @@ function reliabilityTone(score) {
   return score >= 82 ? 'solid' : score >= 65 ? 'good' : score >= 45 ? 'partial' : 'weak';
 }
 
+function reliabilityStatus(item = {}) {
+  if (item.status) return item.status;
+  return item.score >= 82 ? 'solid' : item.score >= 45 ? 'partial' : 'unknown';
+}
+
+function reliabilityStatusLabel(item = {}) {
+  if (item.statusLabel) return item.statusLabel;
+  const status = reliabilityStatus(item);
+  return status === 'solid' ? 'Solido' : status === 'partial' ? 'Parziale' : 'Non documentato';
+}
+
 function reliabilityLedgerMarkup(ledger, compact = false) {
   if (!ledger) return '';
-  return `<section class="reliability-ledger ${compact ? 'compact' : ''}"><header><div><span class="section-code">RELIABILITY LEDGER</span><h4>Quanto è solida questa lettura?</h4></div><div class="reliability-dial ${reliabilityTone(ledger.overall)}" style="--reliability:${ledger.overall}"><span><b>${ledger.overall}</b><small>${escapeHtml(ledger.level)}</small></span></div></header><div class="reliability-rows">${(ledger.items || []).map(item => `<article><div><strong>${escapeHtml(item.label)}</strong><span>${escapeHtml(item.source || item.note || '')}</span></div><i><b class="${reliabilityTone(item.score)}" style="width:${clampClient(item.score, 0, 100)}%"></b></i><em>${Math.round(item.score)}</em><p>${escapeHtml(item.note || '')}</p></article>`).join('')}</div><footer>${icon('shield')}<span>${escapeHtml(ledger.rule || '')}</span></footer></section>`;
+  const items = ledger.items || [];
+  const statuses = items.map(reliabilityStatus);
+  const counts = ledger.counts || {
+    solid: statuses.filter(status => status === 'solid').length,
+    partial: statuses.filter(status => ['partial', 'expected'].includes(status)).length,
+    critical: statuses.filter(status => status === 'critical').length,
+    unknown: statuses.filter(status => ['unknown', 'optional'].includes(status)).length
+  };
+  const readiness = ledger.readiness;
+  const dimensionMarkup = item => {
+    const dimensions = item.dimensions;
+    if (!dimensions) return '';
+    return `<div class="reliability-dimensions" aria-label="Dimensioni di affidabilità"><span><small>Provenienza</small><b>${Math.round(dimensions.provenance)}</b></span><span><small>Copertura</small><b>${Math.round(dimensions.coverage)}</b></span><span><small>Freschezza</small><b>${Math.round(dimensions.freshness)}</b></span></div>`;
+  };
+  const rows = items.map((item, index) => {
+    const status = reliabilityStatus(item);
+    const score = Math.round(clampClient(item.score, 0, 100));
+    const update = item.updatedAt ? `Aggiornato ${relativeTime(item.updatedAt)}` : 'Timestamp non disponibile';
+    const missingEvidence = Array.isArray(item.missingEvidence) ? item.missingEvidence.filter(Boolean).join(' · ') : item.missingEvidence || '';
+    const gapLabel = status === 'expected' ? 'Evidenza attesa' : status === 'partial' ? 'Copertura mancante' : 'Prova mancante';
+    const open = !compact && (item.critical || status === 'critical') ? ' open' : '';
+    return `<details class="reliability-row status-${escapeHtml(status)}"${open}><summary><span class="reliability-row-index" aria-hidden="true">${String(index + 1).padStart(2, '0')}</span><div class="reliability-row-title"><strong>${escapeHtml(item.label)}</strong><small>${escapeHtml(item.source || 'Fonte non dichiarata')}</small></div><span class="reliability-status">${escapeHtml(reliabilityStatusLabel(item))}</span><b class="reliability-score">${score}<small>/100</small></b>${icon('chevron')}</summary><div class="reliability-row-body"><div class="reliability-bar ${reliabilityTone(score)}" role="progressbar" aria-label="Affidabilità aggregata ${score} su 100" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${score}"><span style="width:${score}%"></span></div>${dimensionMarkup(item)}<p>${escapeHtml(item.note || 'Nessuna nota aggiuntiva.')}</p>${item.decisionImpact ? `<p class="reliability-impact"><b>Impatto sulla decisione</b>${escapeHtml(item.decisionImpact)}</p>` : ''}${missingEvidence ? `<p class="reliability-gap gap-${escapeHtml(status)}">${icon('info')}<span><b>${escapeHtml(gapLabel)}</b>${escapeHtml(missingEvidence)}</span></p>` : ''}<div class="reliability-row-meta"><span>${icon('clock')} ${escapeHtml(update)}</span><span>${icon('shield')} Impatto: ${escapeHtml(item.impactLabel || 'Supporto')}</span>${item.nextCheck ? `<span>${icon('refresh')} ${escapeHtml(item.nextCheck)}</span>` : ''}</div></div></details>`;
+  }).join('');
+  const priority = ledger.priority ? `<aside class="reliability-priority"><span class="priority-icon">${icon(ledger.readiness?.state === 'hold' ? 'info' : 'clock')}</span><div><small>PRIORITÀ PRIMA DEL KICKOFF</small><strong>${escapeHtml(ledger.priority.label)}</strong><p>${escapeHtml(ledger.priority.text)}</p><em>${escapeHtml(ledger.priority.nextCheck || 'Aggiornamento automatico')}</em></div></aside>` : '';
+  return `<section class="reliability-ledger ${compact ? 'compact' : ''}"><header><div><span class="section-code">DATA RELIABILITY LEDGER</span><h4>Qualità e completezza delle prove</h4><p>Il punteggio descrive i dati disponibili, non la probabilità che il pronostico si realizzi.</p></div><div class="reliability-total ${reliabilityTone(ledger.overall)}"><strong>${Math.round(ledger.overall)}</strong><span>/100</span><small>${escapeHtml(ledger.level)}</small></div></header><div class="reliability-summary"><div><span class="summary-solid"><b>${counts.solid || 0}</b> solide</span><span class="summary-partial"><b>${counts.partial || 0}</b> parziali/attese</span><span class="summary-critical"><b>${counts.critical || 0}</b> critiche</span><span class="summary-unknown"><b>${counts.unknown || 0}</b> non documentate</span></div>${readiness ? `<aside class="data-readiness state-${escapeHtml(readiness.state)}"><small>DATA READINESS</small><strong>${escapeHtml(readiness.label)}</strong><span>${escapeHtml(readiness.title)}</span></aside>` : ''}</div>${priority}<div class="reliability-rows">${rows}</div><footer>${icon('shield')}<div>${ledger.scoreMeaning ? `<strong>${escapeHtml(ledger.scoreMeaning)}</strong>` : ''}<span>${escapeHtml(ledger.rule || '')}</span></div></footer></section>`;
 }
 
 function teamDnaEvent(event) {
@@ -1245,7 +1280,7 @@ function renderPowerAnalysis(data) {
   const h2hRows = (data.h2h?.events || []).slice(0, 5).map(event => `<div class="h2h-row"><span>${escapeHtml(displayDate(event.date))}</span><div><strong>${escapeHtml(event.home.name)}</strong><b>${event.home.score}–${event.away.score}</b><strong>${escapeHtml(event.away.name)}</strong></div></div>`).join('');
   return `<section class="power-analysis">
     <header class="power-title"><div><span class="power-mark">POWER MODEL ${escapeHtml(data.engine?.version || '3.0')}</span><h3>Analisi quantitativa con gate</h3></div><div class="quality-score" style="--quality:${quality}"><span><b>${quality}</b><small>qualità ${qualityLabel(quality)}</small></span></div></header>
-    <section class="decision-passport ${escapeHtml(decision.state)}"><header><span>DECISION PASSPORT</span><b>${escapeHtml(decision.label)}</b></header><h4>${escapeHtml(decision.title)}</h4><p>${escapeHtml(decision.reason)}</p>${decision.unknowns?.length ? `<div>${decision.unknowns.map(item => `<span>${escapeHtml(item)}</span>`).join('')}</div>` : '<div><span>Nessun vuoto critico registrato</span></div>'}</section>
+    <section class="decision-passport ${escapeHtml(decision.state)}"><header><span>MODEL GATE</span><b>${escapeHtml(decision.label)}</b></header><h4>${escapeHtml(decision.title)}</h4><p>${escapeHtml(decision.reason)}</p>${decision.unknowns?.length ? `<div>${decision.unknowns.map(item => `<span>${escapeHtml(item)}</span>`).join('')}</div>` : '<div><span>Nessun vuoto critico del modello</span></div>'}</section>
     <section class="model-passport"><header><span>MODEL PASSPORT</span><strong>snapshot ${escapeHtml(generatedLabel)}</strong></header><div><span><small>Motore</small><b>v${escapeHtml(data.engine?.version || 'n/d')}</b></span><span><small>Campione effettivo</small><b>${diagnostics.effectiveSample ?? data.engine?.effectiveSample ?? '–'}</b></span><span><small>Half-life</small><b>${diagnostics.recencyHalfLifeDays ? `${diagnostics.recencyHalfLifeDays}g` : '–'}</b></span><span><small>Shrinkage</small><b>${diagnostics.priorWeight ? `prior ${diagnostics.priorWeight}` : '–'}</b></span><span><small>Low-score</small><b>${escapeHtml(diagnostics.lowScoreCorrection?.method || 'n/d')}</b></span><span><small>Pesi</small><b>M ${data.ensemble?.modelWeight ?? 100}% · K ${data.ensemble?.marketWeight ?? 0}%</b></span></div></section>
     ${primary && decision.state !== 'hold' ? `<article class="primary-signal"><div><span>SEGNALE ATTIVO · ${escapeHtml(decision.label)}</span><h4>${escapeHtml(primary.label)}</h4><p>${escapeHtml(primary.reason)}</p></div><strong>${primary.probability}<small>%</small></strong><i class="risk-tag ${String(data.assessment?.risk || '').toLowerCase()}">Rischio ${escapeHtml(data.assessment?.risk || 'n/d')}</i></article>` : `<article class="primary-signal gate-hold"><div><span>ASTENSIONE ATTIVA</span><h4>Nessun segnale promosso</h4><p>Le probabilità restano consultabili per trasparenza, ma non vengono presentate come scelta operativa.</p></div><strong>—</strong><i class="risk-tag alto">HOLD</i></article>`}
     <section class="power-block"><header><h4>Probabilità 1-X-2</h4><span>${data.market?.outcome ? 'Consenso modello + mercato' : 'Solo modello con shrinkage'}</span></header><div class="probabilities">${probabilityBar(data.event.home.name, data.probabilities.home, 'home')}${probabilityBar('Pareggio', data.probabilities.draw, 'draw')}${probabilityBar(data.event.away.name, data.probabilities.away, 'away')}</div><div class="model-note">Solo modello: ${data.statisticalProbabilities.home}% · ${data.statisticalProbabilities.draw}% · ${data.statisticalProbabilities.away}%${data.ensemble ? ` · peso modello ${data.ensemble.modelWeight}%${data.ensemble.marketAvailable ? ` / mercato ${data.ensemble.marketWeight}%` : ''}` : ''}</div></section>
@@ -1411,6 +1446,7 @@ function readinessAssessment(data) {
   const ageMinutes = Number.isFinite(generatedTime) ? Math.max(0, (referenceTime - generatedTime) / 60000) : 999;
   const availabilityScore = Number(data.availability?.score || 0);
   const reliabilityScore = Number(data.reliability?.overall || 0);
+  const dataGateState = data.reliability?.readiness?.state || (reliabilityScore >= 65 ? 'ready' : reliabilityScore >= 45 ? 'caution' : 'hold');
   const lineupScore = data.lineups?.official ? 100 : minutes <= 75 ? 20 : 55;
   const sampleScore = Math.min(100, Math.round(sample / 6 * 100));
   const freshnessScore = ageMinutes <= 20 ? 100 : ageMinutes <= 60 ? 55 : 20;
@@ -1420,7 +1456,7 @@ function readinessAssessment(data) {
   const checks = [
     { label: 'Formazioni', value: data.lineups?.official ? 'Ufficiali' : minutes <= 75 ? 'Mancano vicino al via' : 'In attesa', tone: data.lineups?.official ? 'good' : minutes <= 75 ? 'bad' : 'warn' },
     { label: 'Disponibilità', value: `${availabilityScore}/100`, tone: availabilityScore >= 65 ? 'good' : availabilityScore >= 45 ? 'warn' : 'bad' },
-    { label: 'Affidabilità', value: `${reliabilityScore}/100`, tone: reliabilityScore >= 65 ? 'good' : reliabilityScore >= 45 ? 'warn' : 'bad' },
+    { label: 'Gate evidenze', value: `${data.reliability?.readiness?.label || reliabilityScore} · ${reliabilityScore}/100`, tone: dataGateState === 'ready' ? 'good' : dataGateState === 'hold' ? 'bad' : 'warn' },
     { label: 'Campione', value: `${sample} boxscore`, tone: sample >= 4 ? 'good' : sample >= 2 ? 'warn' : 'bad' },
     { label: 'Gate modello', value: model?.decision?.label || 'In verifica', tone: modelDecision === 'ready' ? 'good' : modelDecision === 'hold' ? 'bad' : 'warn' },
     { label: 'Freschezza', value: data.archiveMode ? ageMinutes < 2 ? 'Al salvataggio' : `${Math.round(ageMinutes)} min al salvataggio` : ageMinutes < 2 ? 'Adesso' : `${Math.round(ageMinutes)} min`, tone: ageMinutes <= 20 ? 'good' : ageMinutes <= 60 ? 'warn' : 'bad' }
@@ -1428,8 +1464,8 @@ function readinessAssessment(data) {
   const bad = checks.filter(check => check.tone === 'bad').length;
   const warnings = checks.filter(check => check.tone === 'warn').length;
   let tone = bad >= 2 ? 'blocked' : bad || warnings >= 2 ? 'caution' : 'ready';
-  if (modelDecision === 'hold') tone = 'blocked';
-  else if (modelDecision === 'caution' && tone === 'ready') tone = 'caution';
+  if (modelDecision === 'hold' || dataGateState === 'hold') tone = 'blocked';
+  else if ((modelDecision === 'caution' || dataGateState === 'caution') && tone === 'ready') tone = 'caution';
   const readinessTitle = tone === 'ready' ? 'Pronta per una decisione informata' : tone === 'caution' ? 'Decisione possibile, ma con riserve' : 'Non pronta: troppe prove mancanti';
   return {
     mode: data.archiveMode ? 'archive' : 'pre', tone,
@@ -1564,9 +1600,22 @@ function summaryDecisionPassport(data) {
     const failed = state.analysisErrors[key];
     return `<section class="summary-decision-passport loading"><header><span>DECISION PASSPORT</span><b>${failed ? 'HOLD' : 'IN VERIFICA'}</b></header><h3>${failed ? 'Modello non raggiungibile' : 'Sto verificando la maturità della lettura'}</h3><p>${escapeHtml(failed || 'Campione, benchmark e probabilità vengono caricati in parallelo al dossier editoriale.')}</p></section>`;
   }
-  const decision = model.decision || { state: 'caution', label: 'CAUTION', title: 'Lettura da verificare', reason: 'Gate non disponibile nello snapshot storico.', unknowns: [] };
+  const modelDecision = model.decision || { state: 'caution', label: 'CAUTION', title: 'Lettura da verificare', reason: 'Gate non disponibile nello snapshot storico.', unknowns: [] };
+  const dataDecision = data.reliability?.readiness || { state: 'caution', label: 'CAUTION', title: 'Copertura da verificare', summary: 'Il gate delle evidenze non è disponibile nello snapshot storico.' };
+  const rank = { hold: 0, caution: 1, ready: 2 };
+  const stateName = (rank[dataDecision.state] ?? 1) < (rank[modelDecision.state] ?? 1) ? dataDecision.state : modelDecision.state;
+  const dataLimitsDecision = stateName !== modelDecision.state;
+  const criticalEvidence = (data.reliability?.items || []).filter(item => item.critical || item.status === 'critical').map(item => item.label);
+  const unknowns = [...new Set([...(modelDecision.unknowns || []), ...criticalEvidence])];
+  const decision = {
+    state: stateName,
+    label: stateName === 'ready' ? 'READY' : stateName === 'hold' ? 'HOLD' : 'CAUTION',
+    title: dataLimitsDecision ? dataDecision.title : modelDecision.title,
+    reason: dataLimitsDecision ? `${dataDecision.summary} Il segnale del modello non compensa prove essenziali mancanti.` : `${modelDecision.reason}${dataDecision.state !== 'ready' ? ` ${dataDecision.summary}` : ''}`,
+    unknowns
+  };
   const signal = model.signals?.[0];
-  return `<section class="summary-decision-passport ${escapeHtml(decision.state)}"><header><span>DECISION PASSPORT</span><b>${escapeHtml(decision.label)}</b></header><div class="summary-decision-main"><div><h3>${escapeHtml(decision.title)}</h3><p>${escapeHtml(decision.reason)}</p></div><strong>${decision.state === 'hold' || !signal ? '—' : `${signal.probability}%`}<small>${decision.state === 'hold' || !signal ? 'astensione' : escapeHtml(signal.label)}</small></strong></div><div class="summary-decision-meta"><span><b>${model.engine?.quality ?? '–'}/100</b> qualità modello</span><span><b>${model.engine?.sampleSize ?? '–'}</b> gare recenti</span><span><b>${model.ensemble?.marketAvailable ? 'Sì' : 'No'}</b> benchmark mercato</span><span><b>${decision.unknowns?.length || 0}</b> vuoti aperti</span></div>${decision.unknowns?.length ? `<p class="summary-unknowns">${escapeHtml(decision.unknowns.slice(0, 3).join(' · '))}</p>` : ''}<button data-prematch-jump="numbers" data-room-event="${escapeHtml(data.event.id)}">Apri probabilità e Model Passport ${icon('chevron')}</button></section>`;
+  return `<section class="summary-decision-passport ${escapeHtml(decision.state)}"><header><span>DECISION PASSPORT</span><b>${escapeHtml(decision.label)}</b></header><div class="summary-decision-main"><div><h3>${escapeHtml(decision.title)}</h3><p>${escapeHtml(decision.reason)}</p></div><strong>${decision.state === 'hold' || !signal ? '—' : `${signal.probability}%`}<small>${decision.state === 'hold' || !signal ? 'astensione' : escapeHtml(signal.label)}</small></strong></div><div class="summary-decision-meta"><span><b>${model.engine?.quality ?? '–'}/100</b> qualità modello</span><span><b>${model.engine?.sampleSize ?? '–'}</b> gare recenti</span><span><b>${model.ensemble?.marketAvailable ? 'Sì' : 'No'}</b> benchmark mercato</span><span><b>${escapeHtml(dataDecision.label)}</b> gate evidenze</span><span><b>${decision.unknowns.length}</b> vuoti critici</span></div>${decision.unknowns.length ? `<p class="summary-unknowns">${escapeHtml(decision.unknowns.slice(0, 3).join(' · '))}</p>` : ''}<button data-prematch-jump="numbers" data-room-event="${escapeHtml(data.event.id)}">Apri probabilità e Model Passport ${icon('chevron')}</button></section>`;
 }
 
 function matchRoomSummary(data) {

@@ -1,8 +1,8 @@
 {
   "name": "vantaggio-calcio",
-  "version": "4.9.0",
+  "version": "4.9.1",
   "private": true,
-  "description": "Decision Passport, Power Model 3.0, calendario globale e resilienza bounded senza API a pagamento.",
+  "description": "Reliability Ledger V2, Critical Evidence Gate, Power Model 3.0 e calendario globale senza API a pagamento.",
   "scripts": {
     "start": "node server.js",
     "dev": "node server.js",

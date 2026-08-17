@@ -1,10 +1,10 @@
-# VANTAGGIO 4.9.0 — Trust & Responsive Foundations
+# VANTAGGIO 4.9.1 — Reliability Ledger & Critical Evidence Gate
 
 Portale calcistico responsive in italiano che unisce calendario globale, score essenziale, probabilità calibrabili e **Pre-Match Total Intelligence** in un’identità ibrida esclusiva: regia broadcast, data room e magazine editoriale. Funziona senza API a pagamento, senza account utente e senza dipendenze npm. Il sistema non promette infallibilità: applica un approccio **fail-closed**, espone l’incertezza e può scegliere `HOLD` invece di trasformare dati insufficienti in un consiglio.
 
 ## Esperienza V4 per ogni sezione
 
-- **Dashboard / Daily Briefing**: finestra prematch, agenda delle 48 ore, Decision Gate e copertura, senza ticker o anteprime duplicate.
+- **Dashboard / Daily Briefing**: finestra prematch, agenda delle 48 ore, Model Gate e copertura, senza ticker o anteprime duplicate.
 - **Partite / Pre-Match Command**: ora ufficiale Europe/Rome, dossier da preparare, prossimo kickoff, densità del programma e calendario a giornate. Durante la gara score, minuto e stato restano attuali, mentre il dossier eventualmente osservato prima del kickoff rimane congelato e in sola lettura.
 - **Radar / Signal Studio**: podio delle priorità e tavolo completo di selezione, senza un secondo registro dei segnali ridondante.
 - **News / VANTAGGIO Newsroom**: apertura editoriale, titoli secondari, classificazione tematica, data ed editore visibili.
@@ -12,6 +12,18 @@ Portale calcistico responsive in italiano che unisce calendario globale, score e
 - **Preferiti / My Matchroom**: countdown, prossimo evento, dossier consultati, alert e privacy locale.
 - **Scout Search**: ricerca trasversale di partite, squadre, competizioni e notizie con navigazione da tastiera.
 - **Match dossier / Control Room**: un’unica architettura adattiva raggruppa Sintesi, Squadre, Numeri e Verifiche; il Power Model vive soltanto nell’area Numeri.
+
+## Reliability Ledger & Critical Evidence Gate V4.9.1
+
+- **Tre dimensioni separate**: ogni modulo dichiara `provenance`, `coverage` e `freshness` su scala 0–100. Il punteggio compatibile resta disponibile, ma è descritto come aggregato tecnico: 35% provenienza, 40% copertura e 25% freschezza.
+- **Etichette non ambigue**: le fasce complessive sono `Solida`, `Discreta`, `Parziale` e `Insufficiente`; la vecchia etichetta “Buona” non viene più usata nel Reliability Ledger.
+- **Data Readiness distinta**: il ledger produce un gate informativo `READY / CAUTION / HOLD` separato sia dalla probabilità del segnale sia dal Model Gate statistico. Il Decision Passport finale usa lo stato più prudente dei due gate.
+- **Critical Evidence Gate temporale**: l’assenza degli undici ufficiali è “Non ancora dovuta” fuori dalla finestra di pubblicazione; diventa critica negli ultimi 75 minuti o dopo l’avvio previsto della gara.
+- **Nessuna compensazione impropria**: una rassegna editoriale ricca o un buon contesto non possono rendere `READY` il dossier se lineup o disponibilità rosa hanno vuoti critici.
+- **Disponibilità rinominata e misurabile**: “Copertura disponibilità rosa” mostra fonte, copertura reale, timestamp, prova mancante, controllo successivo e impatto sul gate. Il silenzio dei feed non equivale mai a rosa completa.
+- **Spiegazioni operative**: ogni riga espone stato testuale, fonte, aggiornamento, criticità, impatto `Essenziale / Supporto / Opzionale`, prova mancante e prossimo controllo.
+- **Ledger leggibile su Android**: schede native espandibili, riepilogo degli stati, priorità pre-kickoff, target comodi e layout impilato; colore, etichetta e testo comunicano insieme lo stato.
+- **Compatibilità API**: `overall`, `level`, `items[].score`, `source` e `note` restano disponibili; il contratto V2 aggiunge `schemaVersion`, `dimensions`, `status`, `critical`, `missingEvidence`, `decisionImpact`, `nextCheck`, `readiness` e `priority`.
 
 ## Trust & Responsive Foundations V4.9
 
@@ -191,7 +203,7 @@ Le fonti possono essere parziali o cambiare formato. Il backend normalizza i dat
 - cache last-known-good con età massima proporzionata al TTL; nessun fallback stale perpetuo;
 - un retry su errori transitori/timeout e circuito aperto dopo quattro errori consecutivi, con cooldown da 60 a 300 secondi;
 - endpoint leggeri per partite, classifiche, notizie e stato servizio;
-- asset statici con versionamento cache `4.9.0`; cambio data automatico a mezzanotte nel fuso Europe/Rome.
+- asset statici con versionamento cache `4.9.1`; cambio data automatico a mezzanotte nel fuso Europe/Rome.
 
 ## Pubblicazione con URL stabile
 
@@ -215,7 +227,7 @@ npm test
 npm run audit
 ```
 
-I test verificano homepage e asset V4.9.0, tutte le viste frontend, Decision/Model Passport, gate `READY / CAUTION / HOLD`, recency, shrinkage, low-score correction, Brier, log-loss, soglia di calibrazione, retry, apertura/rientro del circuit breaker, scadenza stale, tipografia minima, touch target, rendering differito, Match Control Room, Pre-Match Total Intelligence, XI probabile/ufficiale, punteggi separati, assenze documentate, Pre-Match Vault, congelamento e blocco post-hoc, Readiness Gate, Evidence Map, Signal Lifecycle, checkpoint T-60/T-30/T-10, delta e riconciliazione, navigazione ARIA, assenza di notifiche e ricalcoli live, fallback trasparente, Source Health Center, Availability Intelligence, Deep Match Review, classifiche, Reliability Ledger e Team DNA. L’audit esteso conta dinamicamente tutti i controlli eseguiti.
+I test verificano homepage e asset V4.9.1, tutte le viste frontend, Decision/Model Passport, Model Gate e Data Readiness `READY / CAUTION / HOLD`, contratto Reliability Ledger V2, separazione provenienza/copertura/freschezza, Critical Evidence Gate temporale, blocco della compensazione opzionale, recency, shrinkage, low-score correction, Brier, log-loss, soglia di calibrazione, retry, apertura/rientro del circuit breaker, scadenza stale, tipografia minima, touch target, rendering differito, Match Control Room, Pre-Match Total Intelligence, XI probabile/ufficiale, punteggi separati, assenze documentate, Pre-Match Vault, congelamento e blocco post-hoc, Readiness Gate, Evidence Map, Signal Lifecycle, checkpoint T-60/T-30/T-10, delta e riconciliazione, navigazione ARIA, assenza di notifiche e ricalcoli live, fallback trasparente, Source Health Center, Availability Intelligence, Deep Match Review, classifiche e Team DNA. L’audit esteso conta dinamicamente tutti i controlli eseguiti.
 
 ## Struttura
 

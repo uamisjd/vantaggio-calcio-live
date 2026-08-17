@@ -26,13 +26,13 @@ function noInvalidNumbers(value) {
 (async () => {
   const home = await request('/', 'text');
   check(home.response.status === 200, 'Homepage HTTP 200');
-  check(home.body.includes('V4.9') && home.body.includes('app.js?v=4.9.0'), 'Homepage V4.9.0 e cache key corrette');
+  check(home.body.includes('V4.9') && home.body.includes('app.js?v=4.9.1'), 'Homepage V4.9.1 e cache key corrette');
   check(home.response.headers.get('x-content-type-options') === 'nosniff', 'Header nosniff presente');
   check(home.response.headers.get('referrer-policy') === 'strict-origin-when-cross-origin', 'Referrer policy sicura presente');
 
   const [manifest, favicon, app, css, status] = await Promise.all([
-    request('/manifest.webmanifest'), request('/favicon.svg', 'text'), request('/app.js?v=4.9.0', 'text'),
-    request('/styles.css?v=4.9.0', 'text'), request('/api/status')
+    request('/manifest.webmanifest'), request('/favicon.svg', 'text'), request('/app.js?v=4.9.1', 'text'),
+    request('/styles.css?v=4.9.1', 'text'), request('/api/status')
   ]);
   check(manifest.response.status === 200 && manifest.body?.start_url === '/#dashboard' && manifest.body?.display === 'standalone', 'Manifest PWA valido');
   check(favicon.response.status === 200 && favicon.body.includes('<svg'), 'Favicon SVG valida');
@@ -62,6 +62,8 @@ function noInvalidNumbers(value) {
   check(pixelFonts.length > 0 && pixelFonts.every(value => value >= 11), 'Nessun microtesto CSS sotto 11px');
   check(css.body.includes('@media (pointer: coarse)') && css.body.includes('content-visibility: auto') && css.body.includes('width: min(1180px'), 'Workspace desktop, touch target e rendering differito presenti');
   check(app.body.includes('DECISION PASSPORT') && app.body.includes('MODEL PASSPORT') && app.body.includes('Log-loss'), 'Decision Passport, Model Passport e log-loss visibili');
+  check(['DATA RELIABILITY LEDGER', 'DATA READINESS', 'PRIORITÀ PRIMA DEL KICKOFF', 'reliability-dimensions', 'Prova mancante'].every(marker => app.body.includes(marker)), 'Reliability Ledger V2, priorità e dimensioni visibili');
+  check(css.body.includes('V4.9.1 · Reliability Ledger') && css.body.includes('.reliability-row.status-critical') && css.body.includes('.reliability-dimensions') && css.body.includes('@media (max-width: 680px)'), 'Reliability Ledger accessibile e impilato su Android');
   check(app.body.includes('preserveMonotonicMatchState') && app.body.includes('continuityGuard'), 'Guardia monotona degli stati partita presente');
   check(app.response.headers.get('cache-control')?.includes('immutable') && css.response.headers.get('cache-control')?.includes('immutable'), 'Asset versionati serviti con cache immutabile');
   check(status.response.status === 200 && status.body?.ok && status.body.timezone === 'Europe/Rome', 'Status API e timezone validi');
@@ -105,7 +107,7 @@ function noInvalidNumbers(value) {
     const probabilitySum = p?.probabilities ? p.probabilities.home + p.probabilities.draw + p.probabilities.away : 0;
     check(Math.abs(probabilitySum - 100) <= 1, `Probabilità 1-X-2 coerenti: ${match.league.id}`);
     check(noInvalidNumbers(power.body), `Power Model senza numeri invalidi: ${match.league.id}`);
-    check(intel.response.status === 200 && intel.body?.ok && i?.engine?.version === '1.3', `Match Intelligence valida: ${match.league.id}`);
+    check(intel.response.status === 200 && intel.body?.ok && i?.engine?.version === '1.4', `Match Intelligence valida: ${match.league.id}`);
     const xi = i?.lineupIntelligence;
     check(Array.isArray(xi?.teams) && xi.teams.length === 2 && ['ufficiale', 'probabili_parziali', 'non_disponibile'].includes(xi.status), `XI Intelligence presente: ${match.league.id}`);
     check(xi?.teams?.every(team => ['ufficiale', 'probabile', 'non_disponibile'].includes(team.mode) && (team.mode === 'non_disponibile' ? team.confidence === null && team.strength === null : Number.isFinite(team.confidence) && Number.isFinite(team.strength))), `Punteggi XI distinti e validi o esplicitamente non disponibili: ${match.league.id}`);
@@ -114,6 +116,9 @@ function noInvalidNumbers(value) {
     check(Array.isArray(i?.availability?.teams) && i.availability.teams.length === 2 && Array.isArray(i.availability.sources) && Number.isFinite(i.availability.score), `Availability Intelligence valida: ${match.league.id}`);
     check(['pre', 'post'].includes(i?.deepDive?.mode) && Array.isArray(i?.deepDive?.paragraphs) && i.deepDive.paragraphs.length > 0, `Deep Analysis presente: ${match.league.id}`);
     check(Number.isFinite(i?.reliability?.overall) && Array.isArray(i?.reliability?.items) && i.reliability.items.length >= 5, `Reliability Ledger valido: ${match.league.id}`);
+    check(i?.reliability?.schemaVersion === '2.0' && ['ready', 'caution', 'hold'].includes(i.reliability.readiness?.state) && ['Solida', 'Discreta', 'Parziale', 'Insufficiente'].includes(i.reliability.level), `Data Readiness separata e livelli non ambigui: ${match.league.id}`);
+    check(i?.reliability?.items?.every(item => Number.isFinite(item.dimensions?.provenance) && Number.isFinite(item.dimensions?.coverage) && Number.isFinite(item.dimensions?.freshness) && Array.isArray(item.missingEvidence) && item.decisionImpact && item.nextCheck), `Provenienza, copertura, freschezza e impatto espliciti: ${match.league.id}`);
+    check(!i?.reliability?.items?.some(item => item.critical) || i.reliability.readiness.state !== 'ready', `Le fonti opzionali non compensano vuoti critici: ${match.league.id}`);
     check(Array.isArray(i?.critical) && i.critical.every(item => ['Fatto', 'Lettura', 'Verifica'].includes(item.type)), `Fatti/letture/verifiche separati: ${match.league.id}`);
     check(noInvalidNumbers(intel.body), `Intelligence senza numeri invalidi: ${match.league.id}`);
   });

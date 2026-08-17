@@ -1398,32 +1398,120 @@ async function getTeamSeasonArchive(teamId, leagueId, eventDate) {
 }
 
 function reliabilityLabel(score) {
-  return score >= 82 ? 'Solida' : score >= 65 ? 'Buona' : score >= 45 ? 'Parziale' : 'Debole';
+  return score >= 82 ? 'Solida' : score >= 65 ? 'Discreta' : score >= 45 ? 'Parziale' : 'Insufficiente';
+}
+
+function reliabilityFreshness(value, freshHours = 12, acceptableHours = 72) {
+  const time = new Date(value || 0).getTime();
+  if (!Number.isFinite(time) || time <= 0) return 35;
+  const hours = Math.max(0, (Date.now() - time) / 3_600_000);
+  if (hours <= freshHours) return 96;
+  if (hours <= acceptableHours) return 78;
+  if (hours <= acceptableHours * 3) return 56;
+  return 32;
+}
+
+function reliabilityComposite(provenance, coverage, freshness) {
+  return Math.round(clamp(provenance, 0, 100) * .35 + clamp(coverage, 0, 100) * .4 + clamp(freshness, 0, 100) * .25);
 }
 
 function buildMatchReliability(analysis, homeCalendar, awayCalendar, tactical, news, availability = null) {
+  const generatedAt = analysis.engine?.generatedAt || nowIso();
+  const kickoffMs = new Date(analysis.event?.date || 0).getTime();
+  const minutesToKickoff = Number.isFinite(kickoffMs) ? Math.round((kickoffMs - Date.now()) / 60_000) : null;
+  const lineupDue = !analysis.lineups?.official && (analysis.event?.state !== 'pre' || (Number.isFinite(minutesToKickoff) && minutesToKickoff <= 75));
   const contextSignals = [analysis.context.phase, analysis.context.venue?.name, analysis.context.isTwoLeg ? analysis.context.aggregate : true].filter(Boolean).length;
-  const contextScore = clamp(55 + contextSignals * 15, 0, 100);
+  const contextCoverage = clamp(55 + contextSignals * 15, 0, 100);
   const calendarKnown = [homeCalendar.restDays, awayCalendar.restDays].filter(value => value != null).length;
-  const calendarScore = calendarKnown === 2 ? 88 : calendarKnown === 1 ? 58 : 25;
+  const calendarCoverage = calendarKnown === 2 ? 88 : calendarKnown === 1 ? 58 : 25;
   const technicalGames = tactical.home.observedGames + tactical.away.observedGames;
-  const technicalScore = clamp(25 + technicalGames * 11, 25, 92);
-  const lineupScore = analysis.lineups.official ? 100 : 32;
+  const technicalCoverage = clamp(18 + technicalGames * 13, 18, 96);
+  const technicalDates = [tactical.home, tactical.away].flatMap(profile => (profile.snapshots || []).map(snapshot => snapshot.date)).filter(Boolean);
+  const latestTechnicalAt = technicalDates.sort((a, b) => new Date(b) - new Date(a))[0] || '';
+  const technicalFreshness = reliabilityFreshness(latestTechnicalAt, 24 * 14, 24 * 60);
   const strongNews = news.filter(item => item.reliability === 'forte').length;
   const knownNews = news.filter(item => item.reliability === 'media').length;
-  const newsScore = news.length ? clamp(38 + strongNews * 18 + knownNews * 10, 38, 92) : 28;
-  const availabilityScore = availability?.score ?? 24;
+  const latestNewsAt = news.map(item => item.published).filter(Boolean).sort((a, b) => new Date(b) - new Date(a))[0] || '';
+  const newsCoverage = news.length ? clamp(28 + news.length * 7 + strongNews * 9 + knownNews * 5, 28, 94) : 15;
+  const newsProvenance = news.length ? clamp(52 + strongNews * 15 + knownNews * 8, 52, 94) : 45;
+  const availableSources = (availability?.sources || []).filter(item => item.state === 'disponibile');
+  const sourceTierScore = tier => tier === 1 ? 100 : tier === 2 ? 88 : tier === 3 ? 70 : 52;
+  const availabilityProvenance = availableSources.length ? Math.max(...availableSources.map(item => sourceTierScore(item.tier))) : 35;
+  const latestAvailabilityAt = availableSources.map(item => item.updatedAt).filter(Boolean).sort((a, b) => new Date(b) - new Date(a))[0] || '';
+  const availabilityCoverage = availability?.score ?? 24;
+  const lineupCoverage = analysis.lineups.official ? 100 : 20;
+
+  const buildItem = item => {
+    const score = reliabilityComposite(item.provenance, item.coverage, item.freshness);
+    return {
+      missingEvidence: [], nextCheck: 'Aggiornamento automatico', ...item, score, level: reliabilityLabel(score),
+      dimensions: { provenance: item.provenance, coverage: item.coverage, freshness: item.freshness }
+    };
+  };
   const items = [
-    { id: 'context', label: 'Contesto competizione', score: contextScore, source: 'ESPN event summary', note: analysis.context.isTwoLeg ? 'Fase, gara e aggregato letti dal feed evento.' : 'Fase, sede e stato gara letti dal feed evento.' },
-    { id: 'calendar', label: 'Riposo e calendario', score: calendarScore, source: 'ESPN team schedules', note: `${calendarKnown}/2 calendari con riposo calcolabile.` },
-    { id: 'technical', label: 'DNA tecnico recente', score: technicalScore, source: 'ESPN completed boxscores', note: `${technicalGames} campioni tecnici osservati su un massimo di 6.` },
-    { id: 'lineups', label: 'Formazioni', score: lineupScore, source: 'ESPN event rosters', note: analysis.lineups.official ? 'Entrambi gli undici ufficiali presenti.' : 'Undici ufficiali non ancora completi.' },
-    { id: 'news', label: 'News collegate', score: newsScore, source: 'Google News RSS + editori', note: `${news.length} articoli; ${strongNews} da fonte classificata forte.` },
-    { id: 'availability', label: 'Infortuni e squalifiche', score: availabilityScore, source: availability?.sources?.filter(item => item.state === 'disponibile').map(item => item.label).join(' + ') || 'Copertura non documentata', note: availability?.message || 'Dato non elevato a fatto senza una fonte ufficiale affidabile.' }
-  ].map(item => ({ ...item, level: reliabilityLabel(item.score) }));
-  const weights = { context: .2, calendar: .15, technical: .25, lineups: .2, news: .1, availability: .1 };
+    buildItem({
+      id: 'context', label: 'Contesto competizione', source: 'Riepilogo evento ESPN', provenance: 94, coverage: contextCoverage, freshness: 96,
+      status: contextCoverage >= 85 ? 'solid' : 'partial', statusLabel: contextCoverage >= 85 ? 'Completo' : 'Parziale', impact: 'essential', impactLabel: 'Essenziale', updatedAt: generatedAt,
+      missingEvidence: contextCoverage >= 85 ? [] : ['Uno o più dettagli tra fase, sede e formato del confronto'], decisionImpact: 'Definisce il significato competitivo della gara e l’eventuale contesto su due leg.',
+      note: analysis.context.isTwoLeg ? 'Fase, gara e aggregato letti dal feed evento.' : 'Fase, sede e stato gara letti dal feed evento.'
+    }),
+    buildItem({
+      id: 'calendar', label: 'Riposo e calendario', source: 'Calendari squadra ESPN', provenance: 90, coverage: calendarCoverage, freshness: 88,
+      status: calendarKnown === 2 ? 'solid' : calendarKnown === 1 ? 'partial' : 'unknown', statusLabel: calendarKnown === 2 ? 'Completo' : calendarKnown === 1 ? 'Parziale' : 'Non documentato', impact: 'essential', impactLabel: 'Essenziale', updatedAt: generatedAt,
+      missingEvidence: calendarKnown === 2 ? [] : [`Riposo calcolabile per ${2 - calendarKnown} squadra/e`], decisionImpact: 'Il carico resta un contesto prudente e non diventa mai una penalità fisiologica presunta.',
+      note: `${calendarKnown}/2 calendari con riposo calcolabile.`
+    }),
+    buildItem({
+      id: 'technical', label: 'DNA tecnico recente', source: 'Boxscore conclusi ESPN', provenance: 90, coverage: technicalCoverage, freshness: technicalFreshness,
+      status: technicalGames >= 6 && technicalFreshness >= 65 ? 'solid' : technicalGames ? 'partial' : 'unknown', statusLabel: technicalGames >= 6 && technicalFreshness >= 65 ? 'Solido' : technicalGames && technicalFreshness < 65 ? 'Da rinnovare' : technicalGames ? 'Campione parziale' : 'Non documentato', impact: 'supporting', impactLabel: 'Supporto', updatedAt: latestTechnicalAt || generatedAt,
+      missingEvidence: technicalGames >= 6 ? [] : [`${6 - technicalGames} boxscore tecnici rispetto al campione-obiettivo`], decisionImpact: 'Supporta la lettura degli stili; non deve superare da solo un vuoto su XI o disponibilità.',
+      note: `${technicalGames} campioni tecnici osservati su un massimo di 6.`
+    }),
+    buildItem({
+      id: 'lineups', label: 'Formazioni', source: 'Roster evento ESPN', provenance: 96, coverage: lineupCoverage, freshness: 96,
+      status: analysis.lineups.official ? 'solid' : lineupDue ? 'critical' : 'expected', statusLabel: analysis.lineups.official ? 'Ufficiali' : lineupDue ? 'Critiche vicino al via' : 'Non ancora dovute', impact: 'essential', impactLabel: 'Essenziale', critical: Boolean(!analysis.lineups.official && lineupDue), updatedAt: generatedAt,
+      missingEvidence: analysis.lineups.official ? [] : ['Undici ufficiali completi per entrambe le squadre'], decisionImpact: 'Può cambiare forza disponibile, continuità dell’XI e maturità finale della decisione.',
+      nextCheck: analysis.lineups.official ? 'Nessun controllo necessario' : lineupDue ? 'Ricontrollo immediato' : 'Kickoff Watch T−60',
+      note: analysis.lineups.official ? 'Entrambi gli undici ufficiali presenti.' : lineupDue ? 'Gli undici ufficiali mancano nella finestra in cui sono normalmente attesi.' : 'Gli undici ufficiali non sono ancora pubblicati, ma il kickoff è fuori dalla finestra critica.'
+    }),
+    buildItem({
+      id: 'news', label: 'Riscontri editoriali', source: 'Google News RSS + editori', provenance: newsProvenance, coverage: newsCoverage, freshness: reliabilityFreshness(latestNewsAt, 12, 72),
+      status: strongNews ? 'solid' : news.length ? 'partial' : 'optional', statusLabel: strongNews ? 'Con fonti forti' : news.length ? 'Da corroborare' : 'Nessun riscontro', impact: 'optional', impactLabel: 'Opzionale', updatedAt: latestNewsAt,
+      missingEvidence: strongNews || !news.length ? [] : ['Una conferma editoriale da fonte forte'], decisionImpact: 'Aggiunge contesto e conferme, ma non compensa liberamente evidenze essenziali mancanti.',
+      note: `${news.length} articoli collegati; ${strongNews} da fonte forte e ${knownNews} da fonte nota.`
+    }),
+    buildItem({
+      id: 'availability', label: 'Copertura disponibilità rosa', source: availableSources.map(item => item.label).join(' + ') || 'Nessuna fonte strutturata disponibile', provenance: availabilityProvenance, coverage: availabilityCoverage, freshness: latestAvailabilityAt ? reliabilityFreshness(latestAvailabilityAt, 24, 24 * 7) : 40,
+      status: availabilityCoverage >= 65 ? 'solid' : availabilityCoverage >= 40 ? 'partial' : 'critical', statusLabel: availabilityCoverage >= 65 ? 'Documentata' : availabilityCoverage >= 40 ? 'Parziale' : 'Non documentata', impact: 'essential', impactLabel: 'Essenziale', critical: availabilityCoverage < 40, updatedAt: latestAvailabilityAt,
+      missingEvidence: availabilityCoverage >= 65 ? [] : ['Registro strutturato e aggiornato per entrambe le rose'], decisionImpact: 'Condiziona forza disponibile, lettura degli assenti chiave e gate operativo.',
+      nextCheck: availabilityCoverage >= 65 ? 'Monitoraggio ordinario' : 'Nuovo controllo al prossimo checkpoint',
+      note: availability?.message || 'Il silenzio delle fonti non viene interpretato come piena disponibilità.'
+    })
+  ];
+  const weights = { context: .18, calendar: .15, technical: .22, lineups: .18, news: .08, availability: .19 };
   const overall = Math.round(items.reduce((sum, item) => sum + item.score * weights[item.id], 0));
-  return { overall, level: reliabilityLabel(overall), items, rule: 'L’affidabilità misura copertura, provenienza e completezza dei dati; non la probabilità che un pronostico si realizzi.' };
+  const critical = items.filter(item => item.critical);
+  const requiredPartial = items.filter(item => item.impact === 'essential' && ['partial', 'unknown'].includes(item.status));
+  const readinessState = critical.length >= 2 ? 'hold' : critical.length || requiredPartial.length ? 'caution' : 'ready';
+  const priorityItem = critical[0] || requiredPartial[0] || items.find(item => item.status === 'expected') || null;
+  const counts = {
+    solid: items.filter(item => item.status === 'solid').length,
+    partial: items.filter(item => ['partial', 'expected'].includes(item.status)).length,
+    critical: critical.length,
+    unknown: items.filter(item => ['unknown', 'optional'].includes(item.status)).length
+  };
+  const readiness = {
+    state: readinessState,
+    label: readinessState === 'ready' ? 'READY' : readinessState === 'caution' ? 'CAUTION' : 'HOLD',
+    title: readinessState === 'ready' ? 'Prove operative sufficienti' : readinessState === 'caution' ? 'Informazioni utili, ma restano riserve' : 'Troppe evidenze essenziali mancanti',
+    summary: readinessState === 'ready' ? 'Le aree essenziali superano il gate informativo.' : readinessState === 'caution' ? 'La lettura richiede prudenza finché i vuoti essenziali non vengono risolti.' : 'Il sistema deve astenersi finché almeno una lacuna critica non viene risolta.'
+  };
+  return {
+    schemaVersion: '2.0', overall, level: reliabilityLabel(overall), generatedAt, minutesToKickoff, items, counts, readiness,
+    priority: priorityItem ? { id: priorityItem.id, label: priorityItem.label, text: priorityItem.note, nextCheck: priorityItem.nextCheck || 'Aggiornamento automatico' } : null,
+    scoreMeaning: 'Il punteggio combina provenienza 35%, copertura 40% e freschezza 25%. Lo stato operativo applica inoltre un gate sulle evidenze essenziali.',
+    rule: 'Affidabilità dei dati e readiness decisionale restano separate: una fonte può essere autorevole ma non avere ancora pubblicato l’informazione necessaria.'
+  };
 }
 
 async function getTeamDna(teamId, leagueId, teamName = '', force = false) {
@@ -1996,7 +2084,7 @@ function buildDeepDive(analysis, tactical, homeCalendar, awayCalendar, homeSeaso
 }
 
 async function getIntelligence(eventId, leagueId, force = false) {
-  return cached(`intelligence:v3:${leagueId}:${eventId}`, 10 * 60_000, async () => {
+  return cached(`intelligence:v4:${leagueId}:${eventId}`, 10 * 60_000, async () => {
     const analysisResult = await getAnalysis(eventId, leagueId, force);
     const analysis = analysisResult.value;
     const { home, away, date } = analysis.event;
@@ -2062,7 +2150,7 @@ async function getIntelligence(eventId, leagueId, force = false) {
     const reliability = buildMatchReliability(analysis, homeCalendar, awayCalendar, tactical, news, availability);
     const deepDive = buildDeepDive(analysis, tactical, homeCalendar, awayCalendar, homeSeason, awaySeason);
     return {
-      engine: { version: '1.3', name: 'VANTAGGIO Match Intelligence', generatedAt: nowIso() },
+      engine: { version: '1.4', name: 'VANTAGGIO Match Intelligence', generatedAt: nowIso() },
       event: analysis.event,
       generatedAt: nowIso(),
       context: analysis.context,
@@ -2241,6 +2329,7 @@ module.exports = {
   cacheMetadata,
   sourceHealthSnapshot,
   statisticalModel,
+  buildMatchReliability,
   weightedRecentProfile,
   memoryCache,
   sourceTelemetry,
