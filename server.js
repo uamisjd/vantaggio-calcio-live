@@ -4,6 +4,20 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const { URL } = require('url');
+const {
+  EVIDENCE_SCHEMA_VERSION,
+  EVIDENCE_REGISTRY_VERSION,
+  EVIDENCE_MANIFEST_VERSION,
+  buildEntityRegistry,
+  canonicalPlayerRef,
+  normalizedName,
+  shortHash,
+  makeEvidence,
+  resolveAllEvidence,
+  buildEvidenceSummary,
+  combineDecisionTrace,
+  publicFoundationManifest
+} = require('./lib/evidence');
 
 const PORT = Number(process.env.PORT || 4173);
 const HOST = '0.0.0.0';
@@ -116,6 +130,10 @@ const ANALYSIS_LEAGUES = new Set([
   'uefa.champions_qual', 'uefa.super_cup', 'uefa.europa.conf', 'ita.coppa_italia', 'club.friendly',
   'eng.2', 'ita.2', 'por.1', 'ned.1', 'tur.1', 'bel.1', 'sco.1', 'usa.1', 'mex.1', 'arg.1', 'bra.1'
 ]);
+
+function competitionMetadata(leagueId) {
+  return LEAGUES[leagueId] || STANDINGS_LEAGUES[leagueId] || Object.values(GLOBAL_COMPETITIONS).find(item => item.id === leagueId) || { id: leagueId, label: leagueId, country: '' };
+}
 
 const memoryCache = new Map();
 const sourceTelemetry = new Map();
@@ -1514,6 +1532,176 @@ function buildMatchReliability(analysis, homeCalendar, awayCalendar, tactical, n
   };
 }
 
+function evidenceExpiry(observedAt, minutes) {
+  return new Date(new Date(observedAt).getTime() + minutes * 60_000).toISOString();
+}
+
+function availabilitySourceId(item = {}) {
+  const source = String(item.source || item.publisher || '').toLowerCase();
+  if (source.includes('fantasy premier') || source.includes('fpl')) return 'fantasy-premier-league';
+  if (source.includes('espn')) return 'espn-injuries';
+  return 'google-news-rss';
+}
+
+function buildCurrentEvidenceFoundation(analysis, availability, reliability, generatedAt = nowIso()) {
+  const registry = buildEntityRegistry(analysis.event, competitionMetadata(analysis.event.leagueId));
+  const evidence = [];
+  const players = new Map();
+  const eventSubject = { entityType: 'event', entityId: registry.event.entityId };
+  const currentState = analysis.event.state || 'pre';
+  const eventTimeMs = new Date(analysis.event.date || generatedAt).getTime();
+  const observationTimeMs = new Date(generatedAt).getTime();
+  const historicalPost = currentState === 'post' && Number.isFinite(eventTimeMs) && observationTimeMs - eventTimeMs > 12 * 3600_000;
+  const minutesToKickoff = Number.isFinite(reliability?.minutesToKickoff) ? reliability.minutesToKickoff : null;
+  const nearKickoff = Number.isFinite(minutesToKickoff) && minutesToKickoff <= 180;
+  const currentExpiry = currentState === 'post' ? null : evidenceExpiry(generatedAt, currentState === 'in' ? 2 : nearKickoff ? 30 : 360);
+
+  evidence.push(makeEvidence({
+    factType: 'event.identity', subject: eventSubject, sourceId: 'espn-event-summary', observedAt: generatedAt,
+    value: { providerEventId: analysis.event.id, competitionId: registry.competition.entityId, homeTeamId: registry.teams.home.entityId, awayTeamId: registry.teams.away.entityId }, validFrom: generatedAt,
+    locator: `event/${analysis.event.id}/header`, transform: 'buildEntityRegistry@1.0', state: registry.resolutionState === 'confirmed' ? 'confirmed' : 'observed',
+    coverage: registry.resolutionState === 'confirmed' ? 100 : 55, decisionImpact: 'essential'
+  }));
+  evidence.push(makeEvidence({
+    factType: 'event.competition_context', subject: eventSubject, sourceId: 'espn-event-summary', observedAt: generatedAt,
+    value: { competitionId: registry.competition.entityId, phase: analysis.context?.phase || null, isTwoLeg: Boolean(analysis.context?.isTwoLeg), leg: analysis.context?.leg || null, aggregate: analysis.context?.aggregate || null }, validFrom: generatedAt,
+    locator: `event/${analysis.event.id}/competition-context`, transform: 'normalizeCompetitionContext@1.0', state: 'confirmed',
+    coverage: analysis.context?.phase ? 100 : 70, decisionImpact: 'essential'
+  }));
+  evidence.push(makeEvidence({
+    factType: 'event.kickoff', subject: eventSubject, sourceId: 'espn-event-summary', observedAt: generatedAt,
+    value: { scheduledAt: analysis.event.date || null, timezoneDisplay: 'Europe/Rome' }, validFrom: generatedAt, validTo: currentExpiry,
+    expiresAt: currentExpiry, locator: `event/${analysis.event.id}/date`, transform: 'normalizeEventKickoff@1.0',
+    state: analysis.event.date ? 'confirmed' : 'observed', coverage: analysis.event.date ? 100 : 0, decisionImpact: 'essential'
+  }));
+  const venue = analysis.context?.venue || {};
+  evidence.push(makeEvidence({
+    factType: 'event.venue', subject: eventSubject, sourceId: 'espn-event-summary', observedAt: generatedAt,
+    value: { name: venue.name || null, city: venue.city || null, country: venue.country || null }, validFrom: generatedAt, validTo: currentExpiry, expiresAt: currentExpiry,
+    locator: `event/${analysis.event.id}/gameInfo/venue`, transform: 'normalizeCompetitionContext@1.0', state: venue.name ? 'confirmed' : 'observed',
+    coverage: venue.name ? 100 : 0, decisionImpact: 'supporting'
+  }));
+  evidence.push(makeEvidence({
+    factType: 'event.state', subject: eventSubject, sourceId: 'espn-event-summary', observedAt: generatedAt,
+    value: { state: currentState, completed: Boolean(analysis.event.completed), status: analysis.event.status || '' }, validFrom: generatedAt, validTo: currentExpiry, expiresAt: currentExpiry,
+    locator: `event/${analysis.event.id}/status`, transform: 'normalizeEventState@1.0', state: 'confirmed', coverage: 100, decisionImpact: 'essential'
+  }));
+  if (currentState === 'in' || currentState === 'post' || analysis.event.completed) {
+    evidence.push(makeEvidence({
+      factType: 'event.result', subject: eventSubject, sourceId: 'espn-event-summary', observedAt: generatedAt,
+      value: { home: Number(analysis.event.home?.score || 0), away: Number(analysis.event.away?.score || 0), final: currentState === 'post' || Boolean(analysis.event.completed) },
+      validFrom: analysis.event.date || generatedAt, validTo: currentState === 'post' ? null : evidenceExpiry(generatedAt, 2),
+      expiresAt: currentState === 'post' ? null : evidenceExpiry(generatedAt, 2), locator: `event/${analysis.event.id}/score`, transform: 'normalizeEventResult@1.0',
+      state: currentState === 'post' || analysis.event.completed ? 'confirmed' : 'observed', coverage: 100, decisionImpact: 'essential'
+    }));
+  }
+
+  if (analysis.lineups?.official) {
+    const mappedOfficialTeams = new Set();
+    (analysis.lineups.teams || []).forEach(teamLineup => {
+      const teamRef = String(teamLineup.teamId) === String(analysis.event.home?.id) ? registry.teams.home : String(teamLineup.teamId) === String(analysis.event.away?.id) ? registry.teams.away : null;
+      if (!teamRef) return;
+      mappedOfficialTeams.add(teamRef.entityId);
+      const rawStarters = teamLineup.starters || [];
+      const starters = rawStarters.slice(0, 11).map(player => {
+        const playerRef = canonicalPlayerRef(player, teamRef, registry.teams.home.context.season || '');
+        players.set(playerRef.entityId, playerRef);
+        return { entityId: playerRef.entityId, name: player.name, jersey: player.jersey || '', position: player.position || '' };
+      });
+      evidence.push(makeEvidence({
+        factType: 'lineup.official', subject: { ...eventSubject, teamId: teamRef.entityId }, sourceId: 'espn-event-summary', observedAt: generatedAt,
+        value: { official: rawStarters.length === 11, teamId: teamRef.entityId, formation: teamLineup.formation || null, reportedStarterCount: rawStarters.length, starters }, validFrom: generatedAt,
+        locator: `event/${analysis.event.id}/rosters/${teamLineup.teamId}`, transform: 'normalizeLineups@1.0', state: rawStarters.length === 11 ? 'confirmed' : 'rejected',
+        coverage: rawStarters.length === 11 ? 100 : Math.min(99, Math.round(starters.length / 11 * 100)), decisionImpact: 'essential'
+      }));
+    });
+    [registry.teams.home, registry.teams.away].filter(teamRef => !mappedOfficialTeams.has(teamRef.entityId)).forEach(teamRef => evidence.push(makeEvidence({
+      factType: 'lineup.official', subject: { ...eventSubject, teamId: teamRef.entityId }, sourceId: 'espn-event-summary', observedAt: generatedAt,
+      value: { official: false, teamId: teamRef.entityId, status: 'roster_ufficiale_incompleto' }, validFrom: generatedAt,
+      locator: `event/${analysis.event.id}/rosters/${teamRef.entityId}`, transform: 'normalizeLineups@1.0', state: 'rejected',
+      coverage: 0, freshness: 100, decisionImpact: 'essential'
+    })));
+  } else {
+    const lineupStatus = reliability?.items?.find(item => item.id === 'lineups')?.status || 'expected';
+    [registry.teams.home, registry.teams.away].forEach(teamRef => evidence.push(makeEvidence({
+      factType: 'lineup.official', subject: { ...eventSubject, teamId: teamRef.entityId }, sourceId: 'espn-event-summary', observedAt: generatedAt,
+      value: { official: false, teamId: teamRef.entityId, status: analysis.lineups?.status || 'in_attesa' }, validFrom: generatedAt, validTo: evidenceExpiry(generatedAt, nearKickoff ? 10 : 60), expiresAt: evidenceExpiry(generatedAt, nearKickoff ? 10 : 60),
+      locator: `event/${analysis.event.id}/rosters/${teamRef.entityId}`, transform: 'normalizeLineups@1.0', state: lineupStatus === 'expected' ? 'expected' : 'observed',
+      coverage: 0, freshness: 100, decisionImpact: 'essential'
+    })));
+  }
+
+  const mappedAvailabilityTeams = new Set();
+  (availability?.teams || []).forEach(teamAvailability => {
+    const teamRef = String(teamAvailability.teamId) === String(analysis.event.home?.id) ? registry.teams.home : String(teamAvailability.teamId) === String(analysis.event.away?.id) ? registry.teams.away : null;
+    if (!teamRef) return;
+    mappedAvailabilityTeams.add(teamRef.entityId);
+    [...(teamAvailability.structured || []), ...(teamAvailability.lineupOverrides || [])].forEach(item => {
+      const sourceId = availabilitySourceId(item);
+      const playerProvider = sourceId === 'fantasy-premier-league' ? 'fpl' : sourceId === 'espn-injuries' ? 'espn' : 'editorial';
+      const playerRef = canonicalPlayerRef({ id: item.id, name: item.player, provider: playerProvider }, teamRef, registry.teams.home.context.season || '');
+      players.set(playerRef.entityId, playerRef);
+      const factType = item.category === 'squalifica' ? 'player.suspension' : 'player.availability';
+      const isOverride = Boolean(item.overriddenByLineup);
+      evidence.push(makeEvidence({
+        factType, subject: { entityType: 'player', entityId: playerRef.entityId, teamId: teamRef.entityId }, sourceId, observedAt: generatedAt,
+        publishedAt: item.updatedAt || null, value: { player: item.player, teamId: teamRef.entityId, category: item.category || 'stato segnalato', detail: item.detail || '', chance: item.chance ?? null },
+        validFrom: generatedAt, validTo: historicalPost || currentState === 'post' ? null : evidenceExpiry(generatedAt, nearKickoff ? 360 : 1440),
+        expiresAt: historicalPost || currentState === 'post' ? null : evidenceExpiry(generatedAt, nearKickoff ? 360 : 1440), locator: `availability/${teamAvailability.teamId}/${item.id || item.player}`,
+        transform: 'buildAvailabilityDesk@1.0', state: isOverride ? 'superseded' : historicalPost ? 'rejected' : sourceId === 'google-news-rss' ? 'observed' : 'confirmed',
+        coverage: historicalPost ? 0 : item.player ? 100 : 40, decisionImpact: 'supporting'
+      }));
+    });
+    (teamAvailability.signals || []).forEach((article, index) => {
+      evidence.push(makeEvidence({
+        factType: 'news.claim', subject: { entityType: 'team', entityId: teamRef.entityId, claimId: `claim:${shortHash({ title: article.title || '', url: article.link || '', published: article.published || '' }, 16)}` }, sourceId: 'google-news-rss', observedAt: generatedAt,
+        publishedAt: article.published || null, value: { title: article.title || '', publisher: article.publisher || '', url: article.link || '', reliability: article.reliability || 'da_verificare', corroboratedBy: article.corroboratedBy || 0 },
+        validFrom: generatedAt, validTo: historicalPost ? null : evidenceExpiry(generatedAt, 1440), expiresAt: historicalPost ? null : evidenceExpiry(generatedAt, 1440), locator: article.link || `availability-news/${teamAvailability.teamId}/${index}`, transform: 'availabilityCorroboration@1.0',
+        state: historicalPost ? 'rejected' : 'observed', coverage: historicalPost ? 0 : article.corroboratedBy ? 55 : 30, decisionImpact: 'optional'
+      }));
+    });
+  });
+
+  const availabilityInputs = evidence.filter(item => ['player.availability', 'player.suspension', 'news.claim'].includes(item.factType));
+  const availabilityMappingComplete = mappedAvailabilityTeams.size === 2;
+  evidence.push(makeEvidence({
+    factType: 'availability.coverage', subject: eventSubject, sourceId: 'vantaggio-engine', observedAt: generatedAt,
+    value: { status: historicalPost ? 'non_applicabile_storicamente' : availabilityMappingComplete ? availability?.status || 'non_documentata' : 'mapping_incompleto', score: historicalPost || !availabilityMappingComplete ? 0 : Number(availability?.score || 0), reportedCurrentScore: Number(availability?.score || 0), mappedTeamCount: mappedAvailabilityTeams.size, structuredCount: Number(availability?.structuredCount || 0), signalCount: Number(availability?.signalCount || 0), message: historicalPost ? 'Le fonti correnti osservate dopo la gara non documentano retroattivamente la disponibilità pre-match.' : availabilityMappingComplete ? availability?.message || '' : 'Availability non riconciliata con entrambe le identità squadra dell’evento.' },
+    validFrom: generatedAt, validTo: currentState === 'post' ? null : evidenceExpiry(generatedAt, nearKickoff ? 30 : 360), expiresAt: currentState === 'post' ? null : evidenceExpiry(generatedAt, nearKickoff ? 30 : 360), locator: `event/${analysis.event.id}/availability-desk`,
+    transform: 'buildAvailabilityDesk@1.0', derivedFrom: availabilityInputs.map(item => item.evidenceId), state: historicalPost || !availabilityMappingComplete ? 'rejected' : Number(availability?.score || 0) >= 65 ? 'confirmed' : 'observed',
+    provenance: reliability?.items?.find(item => item.id === 'availability')?.dimensions?.provenance || 35,
+    coverage: historicalPost || !availabilityMappingComplete ? 0 : Number(availability?.score || 0), decisionImpact: 'essential'
+  }));
+
+  const resolution = resolveAllEvidence(evidence, { referenceTime: generatedAt });
+  const evidenceSummary = buildEvidenceSummary(evidence, generatedAt, resolution.conflicts, resolution.resolvedFacts);
+  const decisionTrace = combineDecisionTrace(analysis.decision, reliability?.readiness, resolution.resolvedFacts, resolution.conflicts, generatedAt);
+  const playerRefs = [...players.values()];
+  const candidateGroups = new Map();
+  playerRefs.forEach(player => {
+    const key = `${player.teamId || ''}|${normalizedName(player.canonicalName)}`;
+    if (!candidateGroups.has(key)) candidateGroups.set(key, []);
+    candidateGroups.get(key).push(player);
+  });
+  const identityCandidates = [...candidateGroups.values()].filter(group => group.length > 1).map(group => ({
+    entityType: 'player', candidateIds: group.map(player => player.entityId), state: 'candidate', confidence: 100,
+    reason: 'Nome esatto nella stessa squadra e stagione, ma namespace provider diversi: merge automatico vietato.'
+  }));
+  return {
+    schemaVersion: EVIDENCE_SCHEMA_VERSION,
+    registryVersion: EVIDENCE_REGISTRY_VERSION,
+    sourceManifestVersion: EVIDENCE_MANIFEST_VERSION,
+    generatedAt,
+    entityRefs: { ...registry, players: playerRefs, identityCandidates },
+    evidenceSummary,
+    resolvedFacts: resolution.resolvedFacts,
+    conflicts: resolution.conflicts,
+    decisionTrace,
+    evidenceLedger: evidence,
+    rule: 'Ogni fatto conserva identità, fonte, validità, osservazione e scadenza. I conflitti restano visibili e il gate usa sempre lo stato più prudente.'
+  };
+}
+
 async function getTeamDna(teamId, leagueId, teamName = '', force = false) {
   if (!teamId) throw new Error('Squadra non specificata');
   const season = new Date().getUTCFullYear();
@@ -2148,11 +2336,32 @@ async function getIntelligence(eventId, leagueId, force = false) {
 
     const tactical = { home: homeTactical, away: awayTactical, matchup };
     const reliability = buildMatchReliability(analysis, homeCalendar, awayCalendar, tactical, news, availability);
+    const generatedAt = reliability.generatedAt || nowIso();
+    let evidenceFoundation;
+    try {
+      evidenceFoundation = buildCurrentEvidenceFoundation(analysis, availability, reliability, generatedAt);
+    } catch (error) {
+      console.error(`[evidence-foundation] ${analysis.event.id}: ${error.message}`);
+      evidenceFoundation = {
+        schemaVersion: EVIDENCE_SCHEMA_VERSION,
+        registryVersion: EVIDENCE_REGISTRY_VERSION,
+        sourceManifestVersion: EVIDENCE_MANIFEST_VERSION,
+        generatedAt,
+        status: 'rejected',
+        entityRefs: null,
+        evidenceSummary: { schemaVersion: EVIDENCE_SCHEMA_VERSION, total: 0, states: { confirmed: 0, observed: 0, expected: 0, conflicted: 0, superseded: 0, expired: 0, rejected: 1 }, conflicts: { open: 1, critical: 1, ids: [`foundation:${analysis.event.id}`] }, factTypes: [], sources: [], resolved: { total: 0, byState: { rejected: 1 }, unavailableEssential: [] }, essential: { total: 0, current: 0, expected: 0, expired: 0 }, rule: 'Foundation rifiutata: il vuoto resta esplicito e non è compensato.' },
+        resolvedFacts: [],
+        conflicts: [{ conflictId: `foundation:${analysis.event.id}`, factType: 'foundation.schema', subjectId: String(analysis.event.id), detectedAt: generatedAt, state: 'open', severity: 'critical', reason: 'EVIDENCE_FOUNDATION_REJECTED', message: error.message, evidenceIds: [], values: [] }],
+        decisionTrace: { schemaVersion: EVIDENCE_SCHEMA_VERSION, generatedAt, modelGate: { state: analysis.decision?.state || 'caution', label: analysis.decision?.label || 'CAUTION' }, evidenceGate: { state: 'hold', label: 'HOLD' }, effectiveGate: { state: 'hold', label: 'HOLD' }, reasons: ['EVIDENCE_FOUNDATION_REJECTED'], resolvedFactIds: [], criticalConflictIds: [`foundation:${analysis.event.id}`], rule: 'Il Decision Passport usa sempre lo stato più prudente fra Model Gate ed Evidence Gate.' },
+        evidenceLedger: [],
+        rule: 'Errore del contratto evidenza: nessuna compensazione silenziosa; stato HOLD esplicito.'
+      };
+    }
     const deepDive = buildDeepDive(analysis, tactical, homeCalendar, awayCalendar, homeSeason, awaySeason);
     return {
-      engine: { version: '1.4', name: 'VANTAGGIO Match Intelligence', generatedAt: nowIso() },
+      engine: { version: '1.4', name: 'VANTAGGIO Match Intelligence', generatedAt },
       event: analysis.event,
-      generatedAt: nowIso(),
+      generatedAt,
       context: analysis.context,
       deepDive,
       critical: critical.slice(0, 9),
@@ -2165,6 +2374,7 @@ async function getIntelligence(eventId, leagueId, force = false) {
       lineupIntelligence,
       availability,
       reliability,
+      evidenceFoundation,
       news: { articles: news.slice(0, 8), availabilitySignals: availability.signalCount + matchAvailabilityNews.length, disclaimer: 'I titoli sono segnali informativi, non conferme mediche o ufficiali: verifica sempre la fonte originale.' },
       alerts,
       keyQuestion: analysis.context.keyQuestion,
@@ -2232,6 +2442,7 @@ const server = http.createServer(async (req, res) => {
   if (pathname.startsWith('/api/')) {
     try {
       if (pathname === '/api/health') return jsonResponse(res, 200, sourceHealthSnapshot());
+      if (pathname === '/api/evidence-foundation') return jsonResponse(res, 200, { ok: true, data: publicFoundationManifest() });
       if (pathname === '/api/status') {
         return jsonResponse(res, 200, {
           ok: true,
@@ -2330,6 +2541,7 @@ module.exports = {
   sourceHealthSnapshot,
   statisticalModel,
   buildMatchReliability,
+  buildCurrentEvidenceFoundation,
   weightedRecentProfile,
   memoryCache,
   sourceTelemetry,

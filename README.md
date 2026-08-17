@@ -1,4 +1,4 @@
-# VANTAGGIO 4.9.1 — Reliability Ledger & Critical Evidence Gate
+# VANTAGGIO 5.0.0 — Evidence Mesh Foundation
 
 Portale calcistico responsive in italiano che unisce calendario globale, score essenziale, probabilità calibrabili e **Pre-Match Total Intelligence** in un’identità ibrida esclusiva: regia broadcast, data room e magazine editoriale. Funziona senza API a pagamento, senza account utente e senza dipendenze npm. Il sistema non promette infallibilità: applica un approccio **fail-closed**, espone l’incertezza e può scegliere `HOLD` invece di trasformare dati insufficienti in un consiglio.
 
@@ -24,6 +24,21 @@ Portale calcistico responsive in italiano che unisce calendario globale, score e
 - **Spiegazioni operative**: ogni riga espone stato testuale, fonte, aggiornamento, criticità, impatto `Essenziale / Supporto / Opzionale`, prova mancante e prossimo controllo.
 - **Ledger leggibile su Android**: schede native espandibili, riepilogo degli stati, priorità pre-kickoff, target comodi e layout impilato; colore, etichetta e testo comunicano insieme lo stato.
 - **Compatibilità API**: `overall`, `level`, `items[].score`, `source` e `note` restano disponibili; il contratto V2 aggiunge `schemaVersion`, `dimensions`, `status`, `critical`, `missingEvidence`, `decisionImpact`, `nextCheck`, `readiness` e `priority`.
+
+## Evidence Mesh V5.0.0 — Foundation 1 + 2
+
+V5.0.0 aggiunge il linguaggio comune dell’Evidence Mesh senza introdurre nuovi provider, costi o densità nell’interfaccia:
+
+- **Entity Registry V1**: competizione, evento, squadra e giocatore ricevono riferimenti canonici deterministici. Gli ID opachi includono il namespace del provider; corrispondenze di nome nella stessa squadra possono produrre candidati, ma non autorizzano merge automatici.
+- **Source Manifest V1**: ogni fonte dichiara costo, classe, fact type autorizzati, tier specifico e politica di stale. Non esiste un vincitore globale fra provider.
+- **Evidence Contract V1**: ogni prova conserva soggetto, valore, fonte, `validFrom/validTo`, `publishedAt`, `observedAt`, `expiresAt`, locator, hash, trasformazione, derivazioni, qualità e impatto decisionale.
+- **Riconciliazione per fatto e soggetto**: stato, tier, observation time, supersessioni e conflitti sono valutati separatamente per kickoff, venue, stato/risultato, lineup e availability. Una chiamata ambigua su più soggetti viene rifiutata invece di mescolare identità.
+- **Storia non distruttiva**: una correzione ritira esplicitamente la versione precedente, che resta referenziata; una prova scaduta rimane visibile come `expired`; un conflitto resta aperto e versionato.
+- **Fail-closed temporale**: un’evidenza essenziale scaduta o rifiutata produce `HOLD`; un conflitto materiale produce almeno `CAUTION`. Le fonti correnti non vengono usate per ricostruire retroattivamente l’availability di una vecchia partita.
+- **Foundation 2 compatibile**: `/api/intelligence` conserva tutti i campi V4.9.1 e aggiunge soltanto `evidenceFoundation`, con `entityRefs`, `evidenceSummary`, `evidenceLedger`, `resolvedFacts`, `conflicts` e `decisionTrace`.
+- **Contratto pubblico**: `/api/evidence-foundation` espone le versioni e gli artefatti machine-readable senza chiamare fonti esterne.
+
+Specifiche e ricerca sono in [`ARCHITECTURE_V5_EVIDENCE_MESH.md`](./ARCHITECTURE_V5_EVIDENCE_MESH.md) e [`RESEARCH_V5_DATA_FOUNDATION.md`](./RESEARCH_V5_DATA_FOUNDATION.md). I tre artefatti sono in `data/`; l’implementazione pura è in `lib/evidence.js`.
 
 ## Trust & Responsive Foundations V4.9
 
@@ -195,7 +210,8 @@ Le fonti possono essere parziali o cambiare formato. Il backend normalizza i dat
 
 - Node.js 18+, zero dipendenze runtime;
 - `/api/analysis`: Power Model e contesto essenziale, cache 5 minuti;
-- `/api/intelligence`: calendario, tattica, copione, giocatori, Availability Desk, news e Reliability Ledger, cache separata 10 minuti;
+- `/api/intelligence`: calendario, tattica, copione, giocatori, Availability Desk, news e Reliability Ledger, cache separata 10 minuti; il campo additivo `evidenceFoundation` applica Entity Registry, Evidence Contract e riconciliazione ai fatti esistenti;
+- `/api/evidence-foundation`: manifest pubblico e versionato di contratto, registry, fact type e fonti autorizzate; nessuna chiamata upstream;
 - `/api/team-dna`: profilo squadra, split, fingerprint tecnico e ledger, cache 30 minuti;
 - `/api/health`: telemetria sicura e senza segreti su stato, freschezza, errori, latenza, copertura, circuit breaker e fallback bounded delle fonti;
 - disponibilità FPL cache 30 minuti, injury feed 20 minuti, rassegna availability 15 minuti;
@@ -203,7 +219,7 @@ Le fonti possono essere parziali o cambiare formato. Il backend normalizza i dat
 - cache last-known-good con età massima proporzionata al TTL; nessun fallback stale perpetuo;
 - un retry su errori transitori/timeout e circuito aperto dopo quattro errori consecutivi, con cooldown da 60 a 300 secondi;
 - endpoint leggeri per partite, classifiche, notizie e stato servizio;
-- asset statici con versionamento cache `4.9.1`; cambio data automatico a mezzanotte nel fuso Europe/Rome.
+- asset statici con versionamento cache `5.0.0`; cambio data automatico a mezzanotte nel fuso Europe/Rome.
 
 ## Pubblicazione con URL stabile
 
@@ -222,20 +238,30 @@ Il server usa `PORT=4173` per impostazione predefinita e ascolta su `0.0.0.0`.
 Con il server avviato:
 
 ```bash
-npm run check
+npm run build
 npm test
 npm run audit
+npm run test:resources
+npm run test:sources
 ```
 
-I test verificano homepage e asset V4.9.1, tutte le viste frontend, Decision/Model Passport, Model Gate e Data Readiness `READY / CAUTION / HOLD`, contratto Reliability Ledger V2, separazione provenienza/copertura/freschezza, Critical Evidence Gate temporale, blocco della compensazione opzionale, recency, shrinkage, low-score correction, Brier, log-loss, soglia di calibrazione, retry, apertura/rientro del circuit breaker, scadenza stale, tipografia minima, touch target, rendering differito, Match Control Room, Pre-Match Total Intelligence, XI probabile/ufficiale, punteggi separati, assenze documentate, Pre-Match Vault, congelamento e blocco post-hoc, Readiness Gate, Evidence Map, Signal Lifecycle, checkpoint T-60/T-30/T-10, delta e riconciliazione, navigazione ARIA, assenza di notifiche e ricalcoli live, fallback trasparente, Source Health Center, Availability Intelligence, Deep Match Review, classifiche e Team DNA. L’audit esteso conta dinamicamente tutti i controlli eseguiti.
+Il progetto è Node.js + JavaScript/CSS statici senza bundler: `npm run build` è quindi una build di validazione riproducibile che controlla sintassi di tutti i moduli, import e asset, contratto Evidence, accessibilità statica, breakpoint, font minimi e contrasto. I test `resources` e `sources` richiedono rete e restano separati dalla build deterministica.
+
+I test verificano inoltre artefatti Foundation V1, stabilità delle identità, namespace provider, timestamp, autorizzazione fonte-fatto, precedenza, supersessione, expiry, isolamento dei soggetti, conflitti, mapping Foundation 2 e blocco delle ricostruzioni availability post-hoc. Continuano a verificare homepage e asset V5.0.0, tutte le viste frontend, Decision/Model Passport, Model Gate e Data Readiness `READY / CAUTION / HOLD`, contratto Reliability Ledger V2, separazione provenienza/copertura/freschezza, Critical Evidence Gate temporale, blocco della compensazione opzionale, recency, shrinkage, low-score correction, Brier, log-loss, soglia di calibrazione, retry, apertura/rientro del circuit breaker, scadenza stale, tipografia minima, touch target, rendering differito, Match Control Room, Pre-Match Total Intelligence, XI probabile/ufficiale, punteggi separati, assenze documentate, Pre-Match Vault, congelamento e blocco post-hoc, Readiness Gate, Evidence Map, Signal Lifecycle, checkpoint T-60/T-30/T-10, delta e riconciliazione, navigazione ARIA, assenza di notifiche e ricalcoli live, fallback trasparente, Source Health Center, Availability Intelligence, Deep Match Review, classifiche e Team DNA. L’audit esteso conta dinamicamente tutti i controlli eseguiti.
 
 ## Struttura
 
 - `server.js` — server statico, proxy dati, cache, Power Model e motore Intelligence;
+- `lib/evidence.js` — Entity Registry, Evidence Contract, stati temporali, reconciliation, conflitti e Decision Trace;
+- `data/source-manifest.v1.json`, `data/evidence-contract.v1.json`, `data/entity-registry.v1.json` — contratti machine-readable Foundation V1;
 - `public/index.html` — shell accessibile dell'app;
 - `public/styles.css` — design system responsive e Intelligence Room;
 - `public/app.js` — routing, filtri, ricerca, preferiti, modal e rendering Intelligence;
+- `scripts/evidence-foundation-test.js` — test deterministici Foundation 1 e mapping Foundation 2;
 - `scripts/foundation-test.js` — test puri di modello, retry, circuit breaker, recovery e stale bounded;
+- `scripts/quality-test.js` — integrità asset/import, accessibilità statica, responsive, contrasto e completezza del codice;
+- `scripts/resource-test.js` — verifica HTTP reale di link, immagini e loghi dinamici correnti;
+- `scripts/source-consistency-test.js` — confronto diretto fra fatti esposti e fonte primaria;
 - `scripts/smoke-test.js` — smoke test end-to-end delle funzioni principali;
 - `scripts/frontend-test.js` — rendering VM di viste, dossier, responsive duale e stati limite;
 - `scripts/audit-test.js` — matrice estesa di integrità API, dati e richieste non valide;

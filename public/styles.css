@@ -1,5 +1,3 @@
-@import url('data:text/css,');
-
 :root {
   --bg: #08100d;
   --bg-soft: #0c1511;
@@ -10,7 +8,7 @@
   --line-strong: rgba(207, 231, 218, .2);
   --text: #f3f7f4;
   --muted: #8f9f96;
-  --muted-2: #64736b;
+  --muted-2: #9aaba1;
   --accent: #c8ff52;
   --accent-ink: #10180d;
   --accent-soft: rgba(200, 255, 82, .12);
@@ -43,9 +41,14 @@ html[data-theme="light"] {
   --line-strong: rgba(15, 36, 24, .18);
   --text: #102018;
   --muted: #69766f;
-  --muted-2: #929d97;
-  --accent: #b5ee37;
-  --accent-soft: rgba(115, 166, 16, .12);
+  --muted-2: #5f6d65;
+  --accent: #527c00;
+  --accent-ink: #ffffff;
+  --accent-soft: rgba(82, 124, 0, .12);
+  --blue: #3455c5;
+  --red: #b42335;
+  --amber: #8a4e00;
+  --green: #087a55;
   --shadow: 0 20px 60px rgba(30, 52, 38, .1);
 }
 
@@ -65,7 +68,7 @@ body {
 button, input, select { font: inherit; }
 button { color: inherit; }
 button, a { -webkit-tap-highlight-color: transparent; }
-button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, [role="button"]:focus-visible {
+button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, [role="button"]:focus-visible, [role="link"]:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
@@ -623,6 +626,8 @@ kbd { padding: 3px 7px; background: var(--panel-2); border: 1px solid var(--line
 .command-input { height: 60px; padding: 0 14px 0 19px; display: flex; align-items: center; gap: 12px; border-bottom: 1px solid var(--line); }
 .command-input svg { flex: 0 0 auto; color: var(--muted); }
 .command-input input { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--text); font-size: 13px; }
+.command-input:focus-within { box-shadow: inset 0 0 0 2px var(--accent); }
+.command-input input:focus-visible { outline: none; }
 .command-input input::placeholder { color: var(--muted-2); }
 .command-input button { width: 31px; height: 31px; display: grid; place-items: center; border: 0; background: var(--panel-2); color: var(--muted); border-radius: 8px; cursor: pointer; }
 .command-input button svg { width: 14px; }

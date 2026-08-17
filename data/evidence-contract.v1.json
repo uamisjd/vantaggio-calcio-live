@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://vantaggio.local/schema/evidence-contract-v1.json",
+  "x-contractVersion": "1.0",
+  "title": "VANTAGGIO Evidence Contract V1",
+  "type": "object",
+  "required": ["schemaVersion", "evidenceId", "factType", "subject", "value", "source", "time", "scope", "provenance", "quality", "state", "supersedes", "conflictsWith", "decisionImpact"],
+  "properties": {
+    "schemaVersion": { "const": "1.0" },
+    "evidenceId": { "type": "string", "minLength": 8 },
+    "factType": { "enum": ["event.identity", "event.competition_context", "event.kickoff", "event.venue", "event.state", "event.result", "team.recent_result", "team.schedule_event", "team.rest_days", "team.strength_baseline", "team.tactical_metric", "player.availability", "player.suspension", "player.return", "lineup.probable", "lineup.official", "lineup.formation", "lineup.omission", "availability.coverage", "model.forecast", "market.price", "market.consensus", "match.statistics", "news.article", "news.claim", "coach.statement"] },
+    "subject": {
+      "type": "object",
+      "required": ["entityType", "entityId"],
+      "properties": {
+        "entityType": { "enum": ["competition", "event", "team", "player"] },
+        "entityId": { "type": "string", "minLength": 8 },
+        "teamId": { "type": ["string", "null"] },
+        "claimId": { "type": ["string", "null"] }
+      },
+      "additionalProperties": true
+    },
+    "value": {},
+    "source": {
+      "type": "object",
+      "required": ["sourceId", "label", "tier", "class"],
+      "properties": {
+        "sourceId": { "type": "string" },
+        "label": { "type": "string" },
+        "tier": { "type": "integer", "minimum": 1, "maximum": 4 },
+        "class": { "type": "string" }
+      }
+    },
+    "time": {
+      "type": "object",
+      "required": ["validFrom", "validTo", "publishedAt", "observedAt", "expiresAt"],
+      "properties": {
+        "validFrom": { "type": ["string", "null"], "format": "date-time" },
+        "validTo": { "type": ["string", "null"], "format": "date-time" },
+        "publishedAt": { "type": ["string", "null"], "format": "date-time" },
+        "observedAt": { "type": "string", "format": "date-time" },
+        "expiresAt": { "type": ["string", "null"], "format": "date-time" }
+      }
+    },
+    "scope": { "type": "object" },
+    "provenance": {
+      "type": "object",
+      "required": ["locator", "rawHash", "transform", "derivedFrom", "warnings"],
+      "properties": {
+        "locator": { "type": ["string", "null"] },
+        "rawHash": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+        "transform": { "type": "string" },
+        "derivedFrom": { "type": "array", "items": { "type": "string" } },
+        "warnings": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "quality": {
+      "type": "object",
+      "required": ["provenance", "coverage", "freshness"],
+      "properties": {
+        "provenance": { "type": "number", "minimum": 0, "maximum": 100 },
+        "coverage": { "type": "number", "minimum": 0, "maximum": 100 },
+        "freshness": { "type": "number", "minimum": 0, "maximum": 100 }
+      }
+    },
+    "state": { "enum": ["observed", "confirmed", "expected", "conflicted", "superseded", "expired", "rejected"] },
+    "supersedes": { "type": "array", "items": { "type": "string" } },
+    "conflictsWith": { "type": "array", "items": { "type": "string" } },
+    "decisionImpact": { "enum": ["essential", "supporting", "optional"] }
+  },
+  "additionalProperties": true
+}

@@ -8,7 +8,7 @@
   <title>VANTAGGIO — Il calcio, letto meglio</title>
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="/styles.css?v=4.9.1">
+  <link rel="stylesheet" href="/styles.css?v=5.0.0">
 </head>
 <body>
   <svg class="svg-sprite" aria-hidden="true">
@@ -41,16 +41,16 @@
 
       <nav class="primary-nav" aria-label="Navigazione principale">
         <p class="nav-label">MENU</p>
-        <button class="nav-item active" data-view="dashboard"><svg><use href="#i-grid"/></svg><span>Panoramica</span></button>
-        <button class="nav-item" data-view="matches"><svg><use href="#i-ball"/></svg><span>Partite</span><span class="nav-badge quiet" id="prematchNavBadge" title="Prematch disponibili oggi">0</span></button>
-        <button class="nav-item" data-view="radar"><svg><use href="#i-radar"/></svg><span>Match Radar</span></button>
-        <button class="nav-item" data-view="news"><svg><use href="#i-news"/></svg><span>Notizie</span></button>
-        <button class="nav-item" data-view="standings"><svg><use href="#i-table"/></svg><span>Classifiche</span></button>
-        <button class="nav-item" data-view="favorites"><svg><use href="#i-star"/></svg><span>Preferiti</span><span class="nav-badge quiet" id="favoriteBadge">0</span></button>
+        <button class="nav-item active" data-view="dashboard" aria-current="page"><svg aria-hidden="true"><use href="#i-grid"/></svg><span>Panoramica</span></button>
+        <button class="nav-item" data-view="matches"><svg aria-hidden="true"><use href="#i-ball"/></svg><span>Partite</span><span class="nav-badge quiet" id="prematchNavBadge" title="Prematch disponibili oggi">0</span></button>
+        <button class="nav-item" data-view="radar"><svg aria-hidden="true"><use href="#i-radar"/></svg><span>Match Radar</span></button>
+        <button class="nav-item" data-view="news"><svg aria-hidden="true"><use href="#i-news"/></svg><span>Notizie</span></button>
+        <button class="nav-item" data-view="standings"><svg aria-hidden="true"><use href="#i-table"/></svg><span>Classifiche</span></button>
+        <button class="nav-item" data-view="favorites"><svg aria-hidden="true"><use href="#i-star"/></svg><span>Preferiti</span><span class="nav-badge quiet" id="favoriteBadge">0</span></button>
       </nav>
 
       <div class="sidebar-competitions">
-        <div class="nav-label-row"><p class="nav-label">COMPETIZIONI</p><span>7</span></div>
+        <div class="nav-label-row"><p class="nav-label">SCORCIATOIE</p><span>4</span></div>
         <button class="league-shortcut" data-league="ita.1"><i style="--league:#2f7cff"></i>Serie A</button>
         <button class="league-shortcut" data-league="eng.1"><i style="--league:#b764ff"></i>Premier League</button>
         <button class="league-shortcut" data-league="esp.1"><i style="--league:#ff6a55"></i>LaLiga</button>
@@ -58,24 +58,24 @@
       </div>
 
       <div class="source-card">
-        <div class="source-icon"><svg><use href="#i-shield"/></svg></div>
+        <div class="source-icon"><svg aria-hidden="true"><use href="#i-shield"/></svg></div>
         <div><strong>Dati senza costi</strong><span>Feed pubblici con aggiornamento automatico.</span></div>
         <span class="source-dot" title="Stato fonti"></span>
       </div>
-      <div class="sidebar-foot"><span>V4.9.1</span><span>•</span><button id="sourceInfoButton">Fonti & trasparenza</button></div>
+      <div class="sidebar-foot"><span>V5.0.0</span><span>•</span><button id="sourceInfoButton">Fonti & trasparenza</button></div>
     </aside>
 
     <div class="workspace">
       <header class="topbar">
         <button class="mobile-brand" data-view="dashboard" aria-label="Home"><span class="brand-mark"><span></span><span></span><span></span></span><b>VANTAGGIO.</b></button>
         <button class="search-trigger" id="searchTrigger" aria-label="Cerca squadre o competizioni">
-          <svg><use href="#i-search"/></svg><span>Cerca squadre, competizioni...</span><kbd>⌘ K</kbd>
+          <svg aria-hidden="true"><use href="#i-search"/></svg><span>Cerca squadre, competizioni...</span><kbd>⌘ K</kbd>
         </button>
         <div class="topbar-actions">
           <div class="sync-status" id="syncStatus"><i></i><span>Aggiornamento...</span></div>
-          <button class="icon-button" id="refreshButton" title="Aggiorna ora" aria-label="Aggiorna ora"><svg><use href="#i-refresh"/></svg></button>
-          <button class="icon-button" id="themeButton" title="Cambia tema" aria-label="Cambia tema"><svg><use href="#i-sun"/></svg></button>
-          <button class="icon-button notification-button" id="notificationButton" title="Attiva alert" aria-label="Attiva alert" aria-pressed="false"><svg><use href="#i-bell"/></svg><i></i></button>
+          <button class="icon-button" id="refreshButton" title="Aggiorna ora" aria-label="Aggiorna ora"><svg aria-hidden="true"><use href="#i-refresh"/></svg></button>
+          <button class="icon-button" id="themeButton" title="Cambia tema" aria-label="Cambia tema"><svg aria-hidden="true"><use href="#i-sun"/></svg></button>
+          <button class="icon-button notification-button" id="notificationButton" title="Attiva alert" aria-label="Attiva alert" aria-pressed="false"><svg aria-hidden="true"><use href="#i-bell"/></svg><i></i></button>
           <div class="profile-chip" title="Profilo locale">IT</div>
         </div>
       </header>
@@ -96,18 +96,18 @@
   </div>
 
   <nav class="mobile-nav" aria-label="Navigazione mobile">
-    <button class="active" data-view="dashboard"><svg><use href="#i-grid"/></svg><span>Home</span></button>
-    <button data-view="matches"><svg><use href="#i-ball"/></svg><span>Partite</span></button>
-    <button data-view="radar"><span class="mobile-radar"><svg><use href="#i-radar"/></svg></span><span>Radar</span></button>
-    <button data-view="news"><svg><use href="#i-news"/></svg><span>News</span></button>
-    <button data-view="standings"><svg><use href="#i-table"/></svg><span>Tabelle</span></button>
-    <button data-view="favorites"><svg><use href="#i-star"/></svg><span>Salvati</span></button>
+    <button class="active" data-view="dashboard" aria-current="page"><svg aria-hidden="true"><use href="#i-grid"/></svg><span>Home</span></button>
+    <button data-view="matches"><svg aria-hidden="true"><use href="#i-ball"/></svg><span>Partite</span></button>
+    <button data-view="radar"><span class="mobile-radar"><svg aria-hidden="true"><use href="#i-radar"/></svg></span><span>Radar</span></button>
+    <button data-view="news"><svg aria-hidden="true"><use href="#i-news"/></svg><span>News</span></button>
+    <button data-view="standings"><svg aria-hidden="true"><use href="#i-table"/></svg><span>Tabelle</span></button>
+    <button data-view="favorites"><svg aria-hidden="true"><use href="#i-star"/></svg><span>Salvati</span></button>
   </nav>
 
   <div class="search-layer" id="searchLayer" hidden>
     <button class="search-backdrop" data-close-search aria-label="Chiudi ricerca"></button>
     <section class="command-palette" role="dialog" aria-modal="true" aria-label="Ricerca">
-      <div class="command-input"><svg><use href="#i-search"/></svg><input id="globalSearch" type="search" placeholder="Cerca Inter, Serie A, Champions..." autocomplete="off"><button data-close-search><svg><use href="#i-x"/></svg></button></div>
+      <div class="command-input"><svg aria-hidden="true"><use href="#i-search"/></svg><input id="globalSearch" type="search" aria-label="Cerca squadre, competizioni, partite e notizie" placeholder="Cerca Inter, Serie A, Champions..." autocomplete="off"><button data-close-search aria-label="Chiudi ricerca"><svg aria-hidden="true"><use href="#i-x"/></svg></button></div>
       <div class="command-results" id="searchResults"></div>
       <div class="command-tip"><span>↑↓ per navigare</span><span>ESC per chiudere</span></div>
     </section>
@@ -125,6 +125,6 @@
 
   <div class="toast-region" id="toastRegion" aria-live="polite"></div>
 
-  <script src="/app.js?v=4.9.1" defer></script>
+  <script src="/app.js?v=5.0.0" defer></script>
 </body>
 </html>

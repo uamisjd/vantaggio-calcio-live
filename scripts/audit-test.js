@@ -26,15 +26,16 @@ function noInvalidNumbers(value) {
 (async () => {
   const home = await request('/', 'text');
   check(home.response.status === 200, 'Homepage HTTP 200');
-  check(home.body.includes('V4.9') && home.body.includes('app.js?v=4.9.1'), 'Homepage V4.9.1 e cache key corrette');
+  check(home.body.includes('V5.0.0') && home.body.includes('app.js?v=5.0.0'), 'Homepage V5.0.0 e cache key corrette');
   check(home.response.headers.get('x-content-type-options') === 'nosniff', 'Header nosniff presente');
   check(home.response.headers.get('referrer-policy') === 'strict-origin-when-cross-origin', 'Referrer policy sicura presente');
 
-  const [manifest, favicon, app, css, status] = await Promise.all([
-    request('/manifest.webmanifest'), request('/favicon.svg', 'text'), request('/app.js?v=4.9.1', 'text'),
-    request('/styles.css?v=4.9.1', 'text'), request('/api/status')
+  const [manifest, favicon, app, css, status, evidenceManifest] = await Promise.all([
+    request('/manifest.webmanifest'), request('/favicon.svg', 'text'), request('/app.js?v=5.0.0', 'text'),
+    request('/styles.css?v=5.0.0', 'text'), request('/api/status'), request('/api/evidence-foundation')
   ]);
   check(manifest.response.status === 200 && manifest.body?.start_url === '/#dashboard' && manifest.body?.display === 'standalone', 'Manifest PWA valido');
+  check(evidenceManifest.response.status === 200 && evidenceManifest.body?.data?.schemaVersion === '1.0' && evidenceManifest.body?.data?.registryVersion === '1.0' && evidenceManifest.body?.data?.sourceManifest?.sources?.length >= 6, 'Manifest Evidence Foundation V1 valido');
   check(favicon.response.status === 200 && favicon.body.includes('<svg'), 'Favicon SVG valida');
   check(app.response.status === 200 && app.body.includes('renderFallbackDeepAnalysis'), 'Bundle frontend completo');
   check(app.body.includes('MATCH CONTROL ROOM') && app.body.includes('MATCH READINESS GATE') && app.body.includes('EVIDENCE MAP'), 'Control Room, Readiness Gate ed Evidence Map presenti');
@@ -108,6 +109,11 @@ function noInvalidNumbers(value) {
     check(Math.abs(probabilitySum - 100) <= 1, `Probabilità 1-X-2 coerenti: ${match.league.id}`);
     check(noInvalidNumbers(power.body), `Power Model senza numeri invalidi: ${match.league.id}`);
     check(intel.response.status === 200 && intel.body?.ok && i?.engine?.version === '1.4', `Match Intelligence valida: ${match.league.id}`);
+    const foundation = i?.evidenceFoundation;
+    check(foundation?.schemaVersion === '1.0' && foundation.status !== 'rejected' && foundation.entityRefs?.event?.entityId && foundation.evidenceLedger?.length > 0, `Evidence Foundation valida: ${match.league.id}`);
+    check(['event.identity', 'event.kickoff', 'event.venue', 'event.state', 'lineup.official', 'availability.coverage'].every(factType => foundation?.evidenceLedger?.some(item => item.factType === factType)), `Foundation 2 copre i fatti essenziali: ${match.league.id}`);
+    check(foundation?.evidenceLedger?.every(item => item.source?.sourceId && item.time?.observedAt && Number.isFinite(item.quality?.provenance) && Number.isFinite(item.quality?.coverage) && Number.isFinite(item.quality?.freshness)), `Contratto evidence completo: ${match.league.id}`);
+    check(Array.isArray(foundation?.resolvedFacts) && Array.isArray(foundation?.conflicts) && ['ready', 'caution', 'hold'].includes(foundation?.decisionTrace?.effectiveGate?.state), `Riconciliazione e Decision Trace validi: ${match.league.id}`);
     const xi = i?.lineupIntelligence;
     check(Array.isArray(xi?.teams) && xi.teams.length === 2 && ['ufficiale', 'probabili_parziali', 'non_disponibile'].includes(xi.status), `XI Intelligence presente: ${match.league.id}`);
     check(xi?.teams?.every(team => ['ufficiale', 'probabile', 'non_disponibile'].includes(team.mode) && (team.mode === 'non_disponibile' ? team.confidence === null && team.strength === null : Number.isFinite(team.confidence) && Number.isFinite(team.strength))), `Punteggi XI distinti e validi o esplicitamente non disponibili: ${match.league.id}`);

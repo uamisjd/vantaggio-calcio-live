@@ -49,6 +49,7 @@ const state = {
   favoriteSnapshots: readLocalJson('vantaggio:favoriteSnapshots', {}),
   alertsEnabled: localStorage.getItem('vantaggio:alerts') === 'true',
   lastStates: {},
+  focusOrigins: { search: null, modal: null, teamDna: null },
   refreshTimer: null
 };
 
@@ -183,16 +184,14 @@ async function loadInitial() {
   }
   const from = addDays(state.today, -1);
   const to = addDays(state.today, 13);
-  const [matches, news, health] = await Promise.allSettled([
+  const [matches, news] = await Promise.allSettled([
     api(`/api/matches?league=all&from=${from}&to=${to}`),
-    api('/api/news'),
-    api('/api/health')
+    api('/api/news')
   ]);
   if (matches.status === 'fulfilled') applyMatches(matches.value);
   else state.errors.matches = matches.reason.message;
   if (news.status === 'fulfilled') applyNews(news.value);
   else state.errors.news = news.reason.message;
-  if (health.status === 'fulfilled') state.sourceHealth = health.value;
   try { state.sourceHealth = await api('/api/health'); } catch {}
   state.loading = false;
   updateSyncStatus();
@@ -668,11 +667,20 @@ function updateSyncStatus(loading = false) {
   }
 }
 
+function syncNavigationState() {
+  $$('.nav-item, .mobile-nav button').forEach(button => {
+    const active = button.dataset.view === state.currentView;
+    button.classList.toggle('active', active);
+    if (active) button.setAttribute('aria-current', 'page');
+    else button.removeAttribute?.('aria-current');
+  });
+}
+
 function goTo(view) {
   const allowed = ['dashboard', 'matches', 'radar', 'news', 'standings', 'favorites'];
   state.currentView = allowed.includes(view) ? view : 'dashboard';
   if (location.hash !== `#${state.currentView}`) history.pushState(null, '', `#${state.currentView}`);
-  $$('.nav-item, .mobile-nav button').forEach(button => button.classList.toggle('active', button.dataset.view === state.currentView));
+  syncNavigationState();
   closeSearch();
   render();
   $('#mainContent')?.focus({ preventScroll: true });
@@ -684,7 +692,7 @@ function render() {
   const main = $('#mainContent');
   if (!main) return;
   if (state.loading) return;
-  $$('.nav-item, .mobile-nav button').forEach(button => button.classList.toggle('active', button.dataset.view === state.currentView));
+  syncNavigationState();
   const renderers = {
     dashboard: renderDashboard,
     matches: renderMatchesView,
@@ -898,7 +906,7 @@ function radarItem(match, index) {
 function newsCard(article) {
   const image = safeUrl(article.image);
   const style = image ? ` style="background-image:url('${escapeHtml(image.replaceAll("'", '%27'))}')"` : '';
-  return `<article class="news-card ${image ? 'has-image' : ''}" data-news-url="${escapeHtml(safeUrl(article.link))}"${style} tabindex="0">
+  return `<article class="news-card ${image ? 'has-image' : ''}" data-news-url="${escapeHtml(safeUrl(article.link))}"${style} role="link" tabindex="0" aria-label="Apri alla fonte: ${escapeHtml(article.title)}">
     <span class="news-source"><i></i>${escapeHtml(article.source)}</span>
     <h3>${escapeHtml(article.title)}</h3>
     ${article.description ? `<p>${escapeHtml(article.description)}</p>` : ''}
@@ -977,7 +985,7 @@ function newsTopic(article) {
 }
 
 function newsroomSideStory(article, index) {
-  return `<article class="newsroom-side-story" data-news-url="${escapeHtml(safeUrl(article.link))}" tabindex="0"><span>${String(index + 2).padStart(2, '0')} · ${escapeHtml(newsTopic(article))}</span><h3>${escapeHtml(article.title)}</h3><footer><b>${escapeHtml(article.source)}</b><small>${article.published ? escapeHtml(displayNewsDate(article.published)) : 'Ora'}</small>${icon('arrow')}</footer></article>`;
+  return `<article class="newsroom-side-story" data-news-url="${escapeHtml(safeUrl(article.link))}" role="link" tabindex="0" aria-label="Apri alla fonte: ${escapeHtml(article.title)}"><span>${String(index + 2).padStart(2, '0')} · ${escapeHtml(newsTopic(article))}</span><h3>${escapeHtml(article.title)}</h3><footer><b>${escapeHtml(article.source)}</b><small>${article.published ? escapeHtml(displayNewsDate(article.published)) : 'Ora'}</small>${icon('arrow')}</footer></article>`;
 }
 
 function renderNewsView() {
@@ -991,7 +999,7 @@ function renderNewsView() {
     ${viewHeader('VANTAGGIO NEWSROOM', 'Notizie', 'Una prima pagina viva: gerarchia editoriale, temi riconoscibili, data e fonte sempre in evidenza.', `<button class="button" id="viewRefresh">${icon('refresh')} Aggiorna redazione</button>`)}
     <section class="newsroom-status"><div><span class="broadcast-label"><i></i>NEWS DESK AGGIORNATO</span><strong>${articles.length} articoli disponibili</strong></div><div class="source-ticker">${sourceCounts.map(item => `<span><b>${item.count}</b>${escapeHtml(item.source)}</span>`).join('')}</div><small>${updated ? `Ultimo desk ${escapeHtml(relativeTime(updated))}` : 'Sincronizzazione in corso'}</small></section>
     <section class="news-toolbar editorial-toolbar"><div class="filter-row"><button class="filter-chip ${state.newsSource === 'all' ? 'active' : ''}" data-news-source="all">Prima pagina</button>${sources.map(source => `<button class="filter-chip ${state.newsSource === source ? 'active' : ''}" data-news-source="${escapeHtml(source)}">${escapeHtml(source)}</button>`).join('')}</div></section>
-    ${state.errors.news && !state.news.length ? errorBlock(state.errors.news) : (articles.length ? `<section class="front-page"><article class="lead-story ${leadImage ? 'has-image' : ''}" data-news-url="${escapeHtml(safeUrl(lead.link))}" tabindex="0"${leadImage ? ` style="--lead-image:url('${escapeHtml(leadImage.replaceAll("'", '%27'))}')"` : ''}><div class="lead-story-shade"></div><div class="lead-story-content"><span>${escapeHtml(newsTopic(lead))} · APERTURA</span><h2>${escapeHtml(lead.title)}</h2>${lead.description ? `<p>${escapeHtml(lead.description)}</p>` : ''}<footer><b>${escapeHtml(lead.source)}</b><small>${lead.published ? escapeHtml(displayNewsDate(lead.published)) : 'Ultimo aggiornamento'}</small><i>Leggi alla fonte ${icon('external')}</i></footer></div></article><div class="front-page-side">${articles.slice(1, 4).map(newsroomSideStory).join('') || '<div class="intel-empty">Altri titoli in arrivo.</div>'}</div></section><section class="news-archive"><header class="plain-section-head"><div><span class="section-code">ULTIME EDIZIONI</span><h2>Il resto del flusso</h2><p>Ogni scheda apre direttamente la fonte originale</p></div></header><div class="news-grid">${articles.slice(4).map(newsCard).join('') || articles.slice(1).map(newsCard).join('')}</div></section>` : emptyState('news', 'Nessuna notizia', 'Non ci sono articoli per questa fonte. Seleziona “Prima pagina”.'))}
+    ${state.errors.news && !state.news.length ? errorBlock(state.errors.news) : (articles.length ? `<section class="front-page"><article class="lead-story ${leadImage ? 'has-image' : ''}" data-news-url="${escapeHtml(safeUrl(lead.link))}" role="link" tabindex="0" aria-label="Apri alla fonte: ${escapeHtml(lead.title)}"${leadImage ? ` style="--lead-image:url('${escapeHtml(leadImage.replaceAll("'", '%27'))}')"` : ''}><div class="lead-story-shade"></div><div class="lead-story-content"><span>${escapeHtml(newsTopic(lead))} · APERTURA</span><h2>${escapeHtml(lead.title)}</h2>${lead.description ? `<p>${escapeHtml(lead.description)}</p>` : ''}<footer><b>${escapeHtml(lead.source)}</b><small>${lead.published ? escapeHtml(displayNewsDate(lead.published)) : 'Ultimo aggiornamento'}</small><i>Leggi alla fonte ${icon('external')}</i></footer></div></article><div class="front-page-side">${articles.slice(1, 4).map(newsroomSideStory).join('') || '<div class="intel-empty">Altri titoli in arrivo.</div>'}</div></section><section class="news-archive"><header class="plain-section-head"><div><span class="section-code">ULTIME EDIZIONI</span><h2>Il resto del flusso</h2><p>Ogni scheda apre direttamente la fonte originale</p></div></header><div class="news-grid">${articles.slice(4).map(newsCard).join('') || articles.slice(1).map(newsCard).join('')}</div></section>` : emptyState('news', 'Nessuna notizia', 'Non ci sono articoli per questa fonte. Seleziona “Prima pagina”.'))}
   </div>`;
 }
 
@@ -1050,7 +1058,7 @@ function renderFavoritesView() {
 }
 
 function emptyInline(text) {
-  return `<div style="padding:28px 18px;color:var(--muted);text-align:center;font-size:10px">${escapeHtml(text)}</div>`;
+  return `<div style="padding:28px 18px;color:var(--muted);text-align:center;font-size:11px">${escapeHtml(text)}</div>`;
 }
 
 function emptyState(iconName, title, text, action = '') {
@@ -1058,7 +1066,7 @@ function emptyState(iconName, title, text, action = '') {
 }
 
 function errorBlock(message, inline = false) {
-  if (inline) return `<div style="padding:24px;color:var(--red);text-align:center;font-size:10px">Fonte temporaneamente non disponibile · ${escapeHtml(message)}</div>`;
+  if (inline) return `<div style="padding:24px;color:var(--red);text-align:center;font-size:11px">Fonte temporaneamente non disponibile · ${escapeHtml(message)}</div>`;
   return `<section class="empty-state error-state"><div><span class="empty-icon">${icon('info')}</span><h2>Dati non disponibili</h2><p>${escapeHtml(message)}. Riprova tra poco: le altre sezioni continuano a funzionare.</p><button class="button" id="viewRefresh">${icon('refresh')} Riprova</button></div></section>`;
 }
 
@@ -1125,13 +1133,62 @@ function renderTeamDna(data) {
   </div>`;
 }
 
+function rememberFocus(key) {
+  const inherited = key !== 'search' ? state.focusOrigins.search : null;
+  const active = inherited || document.activeElement;
+  state.focusOrigins[key] = active && typeof active.focus === 'function' ? active : null;
+}
+
+function restoreFocus(key) {
+  const target = state.focusOrigins[key];
+  if (!target || typeof target.focus !== 'function') { state.focusOrigins[key] = null; return; }
+  setTimeout(() => {
+    const activeLayer = activeDialogLayer();
+    if (!activeLayer || activeLayer.contains?.(target)) target.focus();
+    if (state.focusOrigins[key] === target) state.focusOrigins[key] = null;
+  }, 0);
+}
+
+function activeDialogLayer() {
+  if (!$('#teamDnaLayer').hidden) return $('#teamDnaLayer');
+  if (!$('#searchLayer').hidden) return $('#searchLayer');
+  if (!$('#modalLayer').hidden) return $('#modalLayer');
+  return null;
+}
+
+function syncBackgroundInert() {
+  const inert = Boolean(activeDialogLayer());
+  const shell = $('.app-shell');
+  const mobileNav = $('.mobile-nav');
+  if (shell) shell.inert = inert;
+  if (mobileNav) mobileNav.inert = inert;
+}
+
+function trapDialogFocus(event) {
+  if (event.key !== 'Tab') return false;
+  const layer = activeDialogLayer();
+  if (!layer) return false;
+  const focusable = $$('button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])', layer)
+    .filter(element => !element.hidden && element.getAttribute?.('aria-hidden') !== 'true');
+  if (!focusable.length) return false;
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  if (layer.contains && !layer.contains(document.activeElement)) { event.preventDefault(); first.focus(); return true; }
+  if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); return true; }
+  if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); return true; }
+  return false;
+}
+
 async function openTeamDna(teamId, teamName, teamLogoUrl, leagueId) {
   if (!teamId) return;
+  rememberFocus('teamDna');
   const layer = $('#teamDnaLayer');
   const modal = $('#teamDnaModal');
   layer.hidden = false;
   document.body.style.overflow = 'hidden';
+  syncBackgroundInert();
   modal.innerHTML = `<button class="modal-close dna-close" data-close-team-dna aria-label="Chiudi Team DNA">${icon('x')}</button><header class="dna-hero loading"><div class="dna-team-identity">${teamLogo({ id: teamId, name: teamName, logo: teamLogoUrl }, 'dna-hero-logo')}<div><span>TEAM DNA</span><h2>${escapeHtml(teamName || 'Squadra')}</h2><p>Ricostruisco risultati, split e impronta tecnica…</p></div></div></header><div class="dna-loading"><i></i><i></i><i></i></div>`;
+  setTimeout(() => $('.modal-close', modal)?.focus(), 20);
   const key = `${leagueId}:${teamId}`;
   try {
     if (!state.teamDna[key]) {
@@ -1147,6 +1204,8 @@ async function openTeamDna(teamId, teamName, teamLogoUrl, leagueId) {
 function closeTeamDna() {
   $('#teamDnaLayer').hidden = true;
   if ($('#modalLayer').hidden && $('#searchLayer').hidden) document.body.style.overflow = '';
+  syncBackgroundInert();
+  restoreFocus('teamDna');
 }
 
 function findMatch(id) {
@@ -1156,6 +1215,7 @@ function findMatch(id) {
 function openMatch(id) {
   const match = findMatch(id);
   if (!match) return;
+  rememberFocus('modal');
   const status = statusMarkup(match);
   const favorite = state.favorites.has(match.id);
   const modal = $('#matchModal');
@@ -1171,6 +1231,7 @@ function openMatch(id) {
     modal.innerHTML = `<button class="modal-close" data-close-modal aria-label="Chiudi">${icon('x')}</button><header class="modal-hero"><span class="modal-competition"><i></i>${escapeHtml(match.league.label)}</span><div class="modal-fixture"><div class="modal-team">${teamLogo(match.home, 'modal-logo')}<strong>${escapeHtml(match.home.name)}</strong></div><div class="modal-score"><strong>${escapeHtml(status.main)}</strong><span>${escapeHtml(status.sub)}</span></div><div class="modal-team">${teamLogo(match.away, 'modal-logo')}<strong>${escapeHtml(match.away.name)}</strong></div></div></header><div class="modal-body"><section class="score-only-live">${icon('ball')}<div><span>STATO GARA</span><h3>${preWindowClosed ? 'Finestra pre-match chiusa' : 'Analisi live disattivata'}</h3><p>${preWindowClosed ? 'Il feed non ha ancora confermato lo stato. Le informazioni prematch eventualmente salvate restano congelate.' : 'Il live mostra solo score, minuto e stato. Sotto resta la fotografia prematch, senza segnali o ricalcoli durante la gara.'}</p></div></section>${archiveBody}<div class="modal-actions"><button class="button primary" data-close-modal>Chiudi</button></div></div>`;
     $('#modalLayer').hidden = false;
     document.body.style.overflow = 'hidden';
+    syncBackgroundInert();
     setTimeout(() => $('.modal-close', modal)?.focus(), 20);
     return;
   }
@@ -1183,6 +1244,7 @@ function openMatch(id) {
     </div>`;
   $('#modalLayer').hidden = false;
   document.body.style.overflow = 'hidden';
+  syncBackgroundInert();
   setTimeout(() => $('.modal-close', modal)?.focus(), 20);
   void Promise.allSettled([loadIntelligence(match), loadAnalysis(match)]);
 }
@@ -1637,7 +1699,7 @@ function matchRoomNumbers(data) {
 }
 
 function matchRoomVerify(data) {
-  const newsMarkup = (data.news?.articles || []).length ? data.news.articles.map(article => `<article class="intel-news" data-news-url="${escapeHtml(safeUrl(article.link))}" tabindex="0"><header><span>${escapeHtml(article.tag)}</span><em class="${escapeHtml(article.reliability || 'da_verificare')}">${article.reliability === 'forte' ? 'Fonte forte' : article.reliability === 'media' ? 'Fonte nota' : 'Da verificare'}</em></header><h5>${escapeHtml(article.title)}</h5><div><b>${escapeHtml(article.publisher)}</b><small>${article.published ? escapeHtml(displayNewsDate(article.published)) : ''}</small>${icon('external')}</div></article>`).join('') : `<div class="intel-empty">Nessun articolo chiaramente collegato trovato nelle fonti indicizzate.</div>`;
+  const newsMarkup = (data.news?.articles || []).length ? data.news.articles.map(article => `<article class="intel-news" data-news-url="${escapeHtml(safeUrl(article.link))}" role="link" tabindex="0" aria-label="Apri alla fonte: ${escapeHtml(article.title)}"><header><span>${escapeHtml(article.tag)}</span><em class="${escapeHtml(article.reliability || 'da_verificare')}">${article.reliability === 'forte' ? 'Fonte forte' : article.reliability === 'media' ? 'Fonte nota' : 'Da verificare'}</em></header><h5>${escapeHtml(article.title)}</h5><div><b>${escapeHtml(article.publisher)}</b><small>${article.published ? escapeHtml(displayNewsDate(article.published)) : ''}</small>${icon('external')}</div></article>`).join('') : `<div class="intel-empty">Nessun articolo chiaramente collegato trovato nelle fonti indicizzate.</div>`;
   const missing = data.deepDive?.unavailable || [];
   return `<div class="match-room-pane verify-pane">${evidenceMapMarkup(data, true)}<details class="room-disclosure" open><summary><div><span>01</span><strong>Fonti e news collegate</strong></div>${icon('chevron')}</summary><div class="intel-news-grid">${newsMarkup}</div><p class="news-disclaimer">${escapeHtml(data.news?.disclaimer || '')}</p></details><details class="room-disclosure"><summary><div><span>02</span><strong>What Changed · storia della partita</strong></div>${icon('chevron')}</summary>${matchChangeHistory(data.event.id)}</details><details class="room-disclosure"><summary><div><span>03</span><strong>Data Reliability Ledger</strong></div>${icon('chevron')}</summary>${reliabilityLedgerMarkup(data.reliability, true)}</details><section class="verification-footer"><article><span>DATI NON DISPONIBILI</span>${missing.length ? missing.map(text => `<p>${icon('info')}<span>${escapeHtml(text)}</span></p>`).join('') : '<p>Nessun vuoto aggiuntivo dichiarato.</p>'}</article><article><span>METODO</span><p>${icon('shield')}<span>${escapeHtml(data.methodology)}</span></p><p>${icon('shield')}<span>${escapeHtml(data.deepDive?.sourceNote || '')}</span></p></article></section></div>`;
 }
@@ -1674,23 +1736,30 @@ function renderIntelligence(data) {
 }
 
 function openInfo() {
+  rememberFocus('modal');
   const modal = $('#matchModal');
   delete modal.dataset.eventId;
   modal.style.removeProperty('--league-color');
-  modal.innerHTML = `<button class="modal-close" data-close-modal aria-label="Chiudi">${icon('x')}</button><header class="modal-hero"><span class="modal-competition"><i></i>TRASPARENZA</span><div style="position:relative;z-index:1;margin-top:24px"><h2 style="margin:0 0 8px;font-size:26px">Dati gratuiti, metodo chiaro.</h2><p style="margin:0;color:rgba(255,255,255,.65);font-size:11px;line-height:1.5">Nessun abbonamento e nessuna chiave API a pagamento.</p></div></header><div class="modal-body"><section class="analysis-box"><div class="analysis-box-head"><span>Fonti attive</span><strong>Feed pubblici</strong></div><p>Partite, contesto, statistiche, calendari, classifiche, lineup e injury route: feed pubblici ESPN. Fantasy Premier League ufficiale aggiunge status e aggiornamenti per la sola Premier League. Google News fornisce titoli datati e link; ANSA, Football Italia ed ESPN alimentano la Newsroom.</p></section><section class="form-comparison"><h3>Come si aggiorna</h3><p style="color:var(--muted);font-size:10px;line-height:1.6">Le partite vengono ricontrollate ogni 90 secondi mentre il sito è aperto; le notizie ogni pochi minuti. A mezzanotte il calendario avanza automaticamente sul nuovo giorno nel fuso Europe/Rome. In caso di errore temporaneo, retry limitato, circuit breaker e cache last-known-good con età massima impediscono propagazioni silenziose.</p><h3 style="margin-top:18px">Power Model 3.0 + Match Intelligence</h3><p style="color:var(--muted);font-size:10px;line-height:1.6">Il Power Model usa Poisson con recency weighting, shrinkage prudente, fattore casa/trasferta e correzione limitata dei punteggi bassi; il mercato senza margine resta separato e riceve un peso dinamico dichiarato. Match Intelligence aggiunge fase e aggregato, riposo, carico gare, campioni tecnici recenti, giocatori chiave, formazioni ufficiali e news pertinenti. Ogni elemento è marcato come fatto, lettura derivata o dato da verificare. Nessun esito è garantito.</p><h3 style="margin-top:18px">Trust & Global Calendar V4.9</h3><p style="color:var(--muted);font-size:10px;line-height:1.6">La scoperta gratuita legge il calendario competitivo globale di ieri, oggi e domani, oltre alle competizioni principali nel periodo esteso. I tornei non ancora catalogati mantengono l’etichetta del provider; le amichevoli entrano soltanto se coinvolgono una grande squadra, così il volume non diventa rumore.</p><h3 style="margin-top:18px">XI Intelligence + Pre-Match Vault V4.8</h3><p style="color:var(--muted);font-size:10px;line-height:1.6">Le probabili derivano da XI recenti pesati, ruoli e disponibilità; le ufficiali soltanto dagli starter pubblicati per l’evento. Affidabilità XI, Forza disponibile e Continuità sono misure distinte, mai probabilità di vittoria. Durante il live score e stato sono correnti, mentre il dossier già osservato prima del kickoff resta locale, congelato, timestampato e in sola lettura: nessuna ricalcolazione post-hoc.</p><h3 style="margin-top:18px">Pre-Match Total Intelligence V4.7</h3><p style="color:var(--muted);font-size:10px;line-height:1.6">Il manifesto in Sintesi dichiara complete, parziali o non disponibili sei aree indispensabili e porta direttamente alle prove. Il dossier prematch congelato non produce segnali o consigli live.</p><h3 style="margin-top:18px">Signal Lifecycle V4.6</h3><p style="color:var(--muted);font-size:10px;line-height:1.6">Dentro la Sintesi, Signal Lifecycle conserva soltanto fotografie realmente pre-kickoff: prima lettura, aggiornamenti materiali e controlli T-60, T-30 e T-10 del Kickoff Watch. Mostra variazioni di readiness, probabilità, lineup, disponibilità e affidabilità; dopo il finale aggiunge il risultato senza ricalcolare il passato.</p></section><div class="modal-note">${icon('shield')}<span>Preferiti, tema e alert sono salvati localmente nel browser. Il sito non richiede account e non invia dati personali.</span></div><div class="modal-actions"><button class="button primary" data-close-modal>Ho capito</button></div></div>`;
+  modal.innerHTML = `<button class="modal-close" data-close-modal aria-label="Chiudi">${icon('x')}</button><header class="modal-hero"><span class="modal-competition"><i></i>TRASPARENZA</span><div style="position:relative;z-index:1;margin-top:24px"><h2 style="margin:0 0 8px;font-size:26px">Dati gratuiti, metodo chiaro.</h2><p style="margin:0;color:rgba(255,255,255,.65);font-size:11px;line-height:1.5">Nessun abbonamento e nessuna chiave API a pagamento.</p></div></header><div class="modal-body"><section class="analysis-box"><div class="analysis-box-head"><span>Fonti attive</span><strong>Feed pubblici</strong></div><p>Partite, contesto, statistiche, calendari, classifiche, lineup e injury route: feed pubblici ESPN. Fantasy Premier League ufficiale aggiunge status e aggiornamenti per la sola Premier League. Google News fornisce titoli datati e link; ANSA, Football Italia ed ESPN alimentano la Newsroom.</p></section><section class="form-comparison"><h3>Come si aggiorna</h3><p style="color:var(--muted);font-size:11px;line-height:1.6">Le partite vengono ricontrollate ogni 90 secondi mentre il sito è aperto; le notizie ogni pochi minuti. A mezzanotte il calendario avanza automaticamente sul nuovo giorno nel fuso Europe/Rome. In caso di errore temporaneo, retry limitato, circuit breaker e cache last-known-good con età massima impediscono propagazioni silenziose.</p><h3 style="margin-top:18px">Power Model 3.0 + Match Intelligence</h3><p style="color:var(--muted);font-size:11px;line-height:1.6">Il Power Model usa Poisson con recency weighting, shrinkage prudente, fattore casa/trasferta e correzione limitata dei punteggi bassi; il mercato senza margine resta separato e riceve un peso dinamico dichiarato. Match Intelligence aggiunge fase e aggregato, riposo, carico gare, campioni tecnici recenti, giocatori chiave, formazioni ufficiali e news pertinenti. Ogni elemento è marcato come fatto, lettura derivata o dato da verificare. Nessun esito è garantito.</p><h3 style="margin-top:18px">Trust & Global Calendar V4.9</h3><p style="color:var(--muted);font-size:11px;line-height:1.6">La scoperta gratuita legge il calendario competitivo globale di ieri, oggi e domani, oltre alle competizioni principali nel periodo esteso. I tornei non ancora catalogati mantengono l’etichetta del provider; le amichevoli entrano soltanto se coinvolgono una grande squadra, così il volume non diventa rumore.</p><h3 style="margin-top:18px">XI Intelligence + Pre-Match Vault V4.8</h3><p style="color:var(--muted);font-size:11px;line-height:1.6">Le probabili derivano da XI recenti pesati, ruoli e disponibilità; le ufficiali soltanto dagli starter pubblicati per l’evento. Affidabilità XI, Forza disponibile e Continuità sono misure distinte, mai probabilità di vittoria. Durante il live score e stato sono correnti, mentre il dossier già osservato prima del kickoff resta locale, congelato, timestampato e in sola lettura: nessuna ricalcolazione post-hoc.</p><h3 style="margin-top:18px">Pre-Match Total Intelligence V4.7</h3><p style="color:var(--muted);font-size:11px;line-height:1.6">Il manifesto in Sintesi dichiara complete, parziali o non disponibili sei aree indispensabili e porta direttamente alle prove. Il dossier prematch congelato non produce segnali o consigli live.</p><h3 style="margin-top:18px">Signal Lifecycle V4.6</h3><p style="color:var(--muted);font-size:11px;line-height:1.6">Dentro la Sintesi, Signal Lifecycle conserva soltanto fotografie realmente pre-kickoff: prima lettura, aggiornamenti materiali e controlli T-60, T-30 e T-10 del Kickoff Watch. Mostra variazioni di readiness, probabilità, lineup, disponibilità e affidabilità; dopo il finale aggiunge il risultato senza ricalcolare il passato.</p></section><div class="modal-note">${icon('shield')}<span>Preferiti, tema e alert sono salvati localmente nel browser. Il sito non richiede account e non invia dati personali.</span></div><div class="modal-actions"><button class="button primary" data-close-modal>Ho capito</button></div></div>`;
   $('#modalLayer').hidden = false;
   document.body.style.overflow = 'hidden';
+  syncBackgroundInert();
+  setTimeout(() => $('.modal-close', modal)?.focus(), 20);
 }
 
 function closeModal() {
   $('#modalLayer').hidden = true;
   if ($('#teamDnaLayer').hidden) document.body.style.overflow = '';
+  syncBackgroundInert();
+  restoreFocus('modal');
 }
 
 function openSearch() {
+  rememberFocus('search');
   const layer = $('#searchLayer');
   layer.hidden = false;
   document.body.style.overflow = 'hidden';
+  syncBackgroundInert();
   const input = $('#globalSearch');
   input.value = '';
   renderSearchResults('');
@@ -1700,6 +1769,8 @@ function openSearch() {
 function closeSearch() {
   $('#searchLayer').hidden = true;
   if ($('#modalLayer').hidden && $('#teamDnaLayer').hidden) document.body.style.overflow = '';
+  syncBackgroundInert();
+  restoreFocus('search');
 }
 
 function renderSearchResults(query) {
@@ -1752,7 +1823,9 @@ function updateNotificationControl() {
 async function toggleNotifications() {
   if (!('Notification' in window)) return toast('Le notifiche non sono supportate da questo browser', true);
   if (!state.alertsEnabled) {
-    const permission = await Notification.requestPermission();
+    let permission;
+    try { permission = await Notification.requestPermission(); }
+    catch { return toast('Impossibile richiedere il permesso notifiche', true); }
     if (permission !== 'granted') return toast('Permesso notifiche non concesso', true);
     state.alertsEnabled = true;
     localStorage.setItem('vantaggio:alerts', 'true');
@@ -1820,6 +1893,7 @@ function setupEvents() {
   });
 
   document.addEventListener('keydown', event => {
+    if (trapDialogFocus(event)) return;
     const roomTab = event.target.closest?.('[data-room-tab]');
     if (roomTab && ['ArrowRight', 'ArrowLeft', 'Home', 'End'].includes(event.key)) {
       const tabs = $$('[data-room-tab]', roomTab.closest('[role="tablist"]'));

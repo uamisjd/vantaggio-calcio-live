@@ -1,0 +1,21 @@
+{
+  "schemaVersion": "1.0",
+  "registryVersion": "1.0",
+  "namespace": "vantaggio",
+  "idPolicies": {
+    "competition": "vantaggio:competition:{provider}:{provider-competition-id}",
+    "event": "vantaggio:event:{provider}:{provider-event-id}",
+    "team": "vantaggio:team:{provider}:{provider-team-id}",
+    "player": "vantaggio:player:{provider}:{provider-player-id-or-context-hash}"
+  },
+  "resolutionStates": ["confirmed", "candidate", "conflict", "retired", "redirect"],
+  "rules": [
+    "Un ID confermato dello stesso provider mantiene l'identità anche se il nome cambia.",
+    "Un alias esatto è utilizzabile soltanto nel paese, competizione e stagione compatibili.",
+    "La similarità fuzzy produce candidati e non autorizza merge automatici.",
+    "Giocatori senza ID stabile restano contestuali a squadra e stagione.",
+    "Correzioni e redirect non cancellano l'identità precedente."
+  ],
+  "manualAliases": [],
+  "redirects": []
+}

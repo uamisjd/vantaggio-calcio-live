@@ -1,13 +1,18 @@
 {
   "name": "vantaggio-calcio",
-  "version": "4.9.1",
+  "version": "5.0.0",
   "private": true,
-  "description": "Reliability Ledger V2, Critical Evidence Gate, Power Model 3.0 e calendario globale senza API a pagamento.",
+  "description": "Evidence Mesh V1, Reliability Ledger V2, Power Model 3.0 e calendario globale senza API a pagamento.",
   "scripts": {
     "start": "node server.js",
     "dev": "node server.js",
-    "check": "node --check server.js && node --check public/app.js && node --check scripts/foundation-test.js && node --check scripts/smoke-test.js && node --check scripts/audit-test.js && node --check scripts/frontend-test.js",
-    "test": "node scripts/foundation-test.js && node scripts/smoke-test.js && node scripts/frontend-test.js",
+    "check": "node --check server.js && node --check lib/evidence.js && node --check public/app.js && node --check scripts/evidence-foundation-test.js && node --check scripts/foundation-test.js && node --check scripts/smoke-test.js && node --check scripts/audit-test.js && node --check scripts/frontend-test.js && node --check scripts/quality-test.js && node --check scripts/resource-test.js && node --check scripts/source-consistency-test.js",
+    "quality": "node scripts/quality-test.js",
+    "build": "npm run check && npm run quality",
+    "test:evidence": "node scripts/evidence-foundation-test.js",
+    "test:resources": "node scripts/resource-test.js",
+    "test:sources": "node scripts/source-consistency-test.js",
+    "test": "node scripts/evidence-foundation-test.js && node scripts/foundation-test.js && node scripts/smoke-test.js && node scripts/frontend-test.js && node scripts/quality-test.js",
     "audit": "node scripts/audit-test.js"
   },
   "engines": {

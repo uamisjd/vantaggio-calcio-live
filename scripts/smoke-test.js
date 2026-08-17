@@ -10,12 +10,12 @@ async function get(path, type = 'json') {
 
 (async () => {
   const html = await get('/', 'text');
-  if (!html.includes('VANTAGGIO') || !html.includes('V4.9') || !html.includes('/app.js?v=4.9.1') || !html.includes('/styles.css?v=4.9.1')) throw new Error('Homepage o asset V4.9.1 non validi');
-  const [appJs, styles] = await Promise.all([get('/app.js?v=4.9.1', 'text'), get('/styles.css?v=4.9.1', 'text')]);
+  if (!html.includes('VANTAGGIO') || !html.includes('V5.0.0') || !html.includes('/app.js?v=5.0.0') || !html.includes('/styles.css?v=5.0.0')) throw new Error('Homepage o asset V5.0.0 non validi');
+  const [appJs, styles] = await Promise.all([get('/app.js?v=5.0.0', 'text'), get('/styles.css?v=5.0.0', 'text')]);
   const v4Modules = ['DAILY BRIEFING', 'PRE-MATCH COMMAND', 'SIGNAL STUDIO', 'VANTAGGIO NEWSROOM', 'TABLE LAB', 'MY MATCHROOM', 'SCOUT SEARCH', 'WHAT CHANGED DESK', 'KICKOFF WATCH', 'TEAM DNA', 'RELIABILITY LEDGER', 'MATCH ARCHIVE', 'MODEL TRACK RECORD', 'SOURCE HEALTH CENTER', 'AVAILABILITY INTELLIGENCE'];
   const dossierFirst = ['MATCH CONTROL ROOM', 'PRE-MATCH TOTAL INTELLIGENCE', 'prematchTotalIntelligence', 'renderFallbackDeepAnalysis', 'readinessGate', 'EVIDENCE MAP', 'SIGNAL LIFECYCLE', 'captureSignalLifecycle', 'COPERTURA RIDOTTA', 'XI INTELLIGENCE', 'PRE-MATCH VAULT', 'capturePrematchVault'];
   const ledgerV2 = ['DATA RELIABILITY LEDGER', 'DATA READINESS', 'reliability-dimensions', 'PRIORITÀ PRIMA DEL KICKOFF', 'Prova mancante', 'gate evidenze'];
-  if (!v4Modules.every(module => appJs.includes(module)) || !dossierFirst.every(module => appJs.includes(module)) || !ledgerV2.every(module => appJs.includes(module)) || !styles.includes('V4.8 · XI Intelligence + Pre-Match Vault') || !styles.includes('V4.9.1 · Reliability Ledger') || !styles.includes('.reliability-row.status-critical') || !styles.includes('.prematch-total-intelligence') || !styles.includes('.xi-intelligence') || !styles.includes('.prematch-vault-banner') || !styles.includes('.deep-dive.fallback')) throw new Error('Moduli esperienza V4.9.1 incompleti');
+  if (!v4Modules.every(module => appJs.includes(module)) || !dossierFirst.every(module => appJs.includes(module)) || !ledgerV2.every(module => appJs.includes(module)) || !styles.includes('V4.8 · XI Intelligence + Pre-Match Vault') || !styles.includes('V4.9.1 · Reliability Ledger') || !styles.includes('.reliability-row.status-critical') || !styles.includes('.prematch-total-intelligence') || !styles.includes('.xi-intelligence') || !styles.includes('.prematch-vault-banner') || !styles.includes('.deep-dive.fallback')) throw new Error('Moduli esperienza V5.0.0 incompleti');
   if (appJs.includes('class="broadcast-strip"') || appJs.includes('function newsroomPreview') || appJs.includes('SIGNAL LEDGER') || styles.includes('.broadcast-strip') || styles.includes('.signal-ledger')) throw new Error('Componenti ridondanti ancora attivi');
   const modalSource = appJs.slice(appJs.indexOf('function openMatch'), appJs.indexOf('function renderFallbackDeepAnalysis'));
   const summarySource = appJs.slice(appJs.indexOf('function matchRoomSummary'), appJs.indexOf('function matchRoomTeams'));
@@ -32,6 +32,8 @@ async function get(path, type = 'json') {
 
   const status = await get('/api/status');
   if (!status.ok || status.timezone !== 'Europe/Rome' || status.leagues.length < 5 || !Array.isArray(status.standingsLeagues) || status.standingsLeagues.length < 12 || !Array.isArray(status.globalCompetitions) || status.globalCompetitions.length < 40) throw new Error('Status API o catalogo globale non valido');
+  const evidenceManifest = await get('/api/evidence-foundation');
+  if (!evidenceManifest.ok || evidenceManifest.data?.schemaVersion !== '1.0' || evidenceManifest.data?.registryVersion !== '1.0' || !Array.isArray(evidenceManifest.data?.sourceManifest?.sources) || evidenceManifest.data.sourceManifest.sources.length < 6) throw new Error('Manifest Evidence Foundation non valido');
 
   const from = new Date(new Date(status.today + 'T12:00:00Z').getTime() - 86400000).toISOString().slice(0, 10);
   const to = new Date(new Date(status.today + 'T12:00:00Z').getTime() + 13 * 86400000).toISOString().slice(0, 10);
@@ -57,6 +59,10 @@ async function get(path, type = 'json') {
   const intelligence = await get(`/api/intelligence?event=${encodeURIComponent(analyzable.id)}&league=${encodeURIComponent(analyzable.league.id)}`);
   const intel = intelligence.data;
   if (!intelligence.ok || intel.engine?.version !== '1.4' || !intel.event || !intel.context || !intel.calendar || !intel.tactical || !intel.reliability || !intel.deepDive || !Array.isArray(intel.deepDive.paragraphs) || !intel.deepDive.paragraphs.length) throw new Error('Match Intelligence API non valida');
+  const evidenceFoundation = intel.evidenceFoundation;
+  if (!evidenceFoundation || evidenceFoundation.status === 'rejected' || evidenceFoundation.schemaVersion !== '1.0' || !evidenceFoundation.entityRefs?.event?.entityId || !Array.isArray(evidenceFoundation.evidenceLedger) || !evidenceFoundation.evidenceLedger.length || !Array.isArray(evidenceFoundation.resolvedFacts) || !Array.isArray(evidenceFoundation.conflicts) || !evidenceFoundation.decisionTrace?.effectiveGate?.state) throw new Error('Evidence Foundation nel dossier non valida');
+  if (!['event.identity', 'event.kickoff', 'event.venue', 'event.state', 'lineup.official', 'availability.coverage'].every(factType => evidenceFoundation.evidenceLedger.some(item => item.factType === factType))) throw new Error('Foundation 2 non copre tutti i fatti essenziali esistenti');
+  if (!evidenceFoundation.evidenceLedger.every(item => item.schemaVersion === '1.0' && item.source?.sourceId && item.time?.observedAt && Number.isFinite(item.quality?.provenance) && Number.isFinite(item.quality?.coverage) && Number.isFinite(item.quality?.freshness))) throw new Error('Contratto evidence incompleto nel dossier');
   const xi = intel.lineupIntelligence;
   if (!xi || !['ufficiale', 'probabili_parziali', 'non_disponibile'].includes(xi.status) || !Array.isArray(xi.teams) || xi.teams.length !== 2 || !xi.rule?.includes('Non sono probabilità di vittoria')) throw new Error('XI Intelligence non valida');
   if (!xi.teams.every(team => ['ufficiale', 'probabile', 'non_disponibile'].includes(team.mode) && Array.isArray(team.selected) && Array.isArray(team.importantMissing) && Array.isArray(team.omissions) && (team.mode === 'non_disponibile' ? team.confidence === null && team.strength === null : Number.isFinite(team.confidence) && Number.isFinite(team.strength)))) throw new Error('Punteggi o classificazioni XI non validi');
@@ -99,11 +105,12 @@ async function get(path, type = 'json') {
   const health = await get('/api/health');
   if (!Array.isArray(health.sources) || !health.sources.some(source => source.calls > 0 && source.lastSuccessAt) || !health.rule || health.resilience?.staleFallback !== 'bounded' || health.resilience?.circuitFailureThreshold !== 4) throw new Error('Source Health Center non valido');
 
-  console.log(`✓ Homepage V4.9.1 e asset cache serviti`);
+  console.log(`✓ Homepage V5.0.0 e asset cache serviti`);
   console.log(`✓ Dossier-first, fallback trasparente e componenti ridondanti rimossi`);
   console.log(`✓ ${matches.data.matches.length} partite in ${matches.data.coverage?.competitions || 0} competizioni`);
   console.log(`✓ Power Model 3.0 operativo su ${analyzable.home.name}–${analyzable.away.name}`);
   console.log(`✓ Match Intelligence: ${intel.critical.length} evidenze, ${intel.alerts.length} alert, affidabilità ${intel.reliability.overall}/100`);
+  console.log(`✓ Evidence Foundation: ${evidenceFoundation.evidenceLedger.length} prove, ${evidenceFoundation.resolvedFacts.length} fatti risolti, ${evidenceFoundation.conflicts.length} conflitti aperti`);
   console.log(`✓ XI Intelligence: ${xi.status}, ${xi.teams.map(team => `${team.teamName} ${team.mode} ${team.confidence == null ? 'n/d' : `${team.confidence}/100`}`).join(' · ')}`);
   console.log(`✓ Availability Intelligence: ${intel.availability.structuredCount} record, ${intel.availability.signalCount} segnali, copertura ${intel.availability.score}/100`);
   if (premierAvailability) console.log(`✓ Premier League availability: FPL ufficiale, ${premierAvailability.structuredCount} status strutturati`);
