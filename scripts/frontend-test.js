@@ -55,7 +55,7 @@ function createNode() {
   context.globalThis = context;
 
   let source = fs.readFileSync('public/app.js', 'utf8').replace(/\ninit\(\);\s*$/, '\n');
-  source += '\nglobalThis.__test={state,localDateKey,safeUrl,teamLogo,newsCard,matchRow,renderDashboard,renderMatchesView,renderRadarView,renderNewsView,renderStandingsView,renderFavoritesView,renderIntelligence,renderFallbackDeepAnalysis,renderPowerAnalysis,lineupIntel,archivePreKickoffModel,reconcileModelSnapshots,modelTrackStats,readinessAssessment,contextDateConflict,captureSignalLifecycle,reconcileSignalLifecycles,capturePrematchVault,archivedPrematchData,renderPrematchVault};';
+  source += '\nglobalThis.__test={state,localDateKey,safeUrl,teamLogo,newsCard,matchRow,renderDashboard,renderMatchesView,renderRadarView,renderNewsView,renderStandingsView,renderFavoritesView,renderIntelligence,renderFallbackDeepAnalysis,renderPowerAnalysis,lineupIntel,archivePreKickoffModel,reconcileModelSnapshots,modelTrackStats,preserveMonotonicMatchState,readinessAssessment,contextDateConflict,captureSignalLifecycle,reconcileSignalLifecycles,capturePrematchVault,archivedPrematchData,renderPrematchVault};';
   vm.runInNewContext(source, context, { filename: 'public/app.js' });
   const test = context.__test;
   test.state.today = status.today;
@@ -105,13 +105,13 @@ function createNode() {
     console.log(`✓ ${name.padEnd(12)} ${String(html.length).padStart(6)} caratteri`);
   }
 
-  if (!renders.roomSummary.includes('MATCH CONTROL ROOM') || !renders.roomSummary.includes('MATCH READINESS GATE') || !renders.roomSummary.includes('PRE-MATCH TOTAL INTELLIGENCE') || !renders.roomSummary.includes('SIGNAL LIFECYCLE')) throw new Error('Sintesi Pre-Match Total Intelligence non valida');
-  if ((renders.roomSummary.match(/data-prematch-jump=/g) || []).length !== 6 || !renders.roomSummary.includes('non documentate')) throw new Error('Manifesto di copertura prematch incompleto');
+  if (!renders.roomSummary.includes('MATCH CONTROL ROOM') || !renders.roomSummary.includes('DECISION PASSPORT') || !renders.roomSummary.includes('MATCH READINESS GATE') || !renders.roomSummary.includes('PRE-MATCH TOTAL INTELLIGENCE') || !renders.roomSummary.includes('SIGNAL LIFECYCLE')) throw new Error('Sintesi Decision Passport o Pre-Match Total Intelligence non valida');
+  if ((renders.roomSummary.match(/data-prematch-jump=/g) || []).length < 7 || !renders.roomSummary.includes('non documentate')) throw new Error('Manifesto di copertura prematch incompleto');
   const conflict = test.contextDateConflict({ event: { date: '2026-08-13T18:00:00Z' }, context: { phase: '2021-22 Qualifying' } });
   if (!conflict.includes('Metadato contraddittorio') || test.contextDateConflict({ event: { date: '2026-08-13T18:00:00Z' }, context: { phase: '2025-26 Qualifying' } })) throw new Error('Contraddizioni temporali del contesto non rilevate correttamente');
   if (!renders.roomTeams.includes('TACTICAL MATCHUP') || !renders.roomTeams.includes('AVAILABILITY INTELLIGENCE') || !renders.roomTeams.includes('XI INTELLIGENCE') || !renders.roomTeams.includes('Affidabilità XI') || !renders.roomTeams.includes('Forza disponibile')) throw new Error('Area Squadre o XI Intelligence non raggruppata correttamente');
   if ((renders.officialLineups.match(/XI UFFICIALE/g) || []).length !== 2 || (renders.officialLineups.match(/>100</g) || []).length < 2 || !renders.officialLineups.includes('in panchina') || !renders.officialLineups.includes('non a referto')) throw new Error('XI ufficiali, punteggio certo o classificazione omissioni non renderizzati');
-  if (!renders.roomNumbers.includes('POWER MODEL 2.1') || !renders.roomNumbers.includes('roomPowerMount')) throw new Error('Area Numeri non valida');
+  if (!renders.roomNumbers.includes('POWER MODEL 3.0') || !renders.roomNumbers.includes('roomPowerMount')) throw new Error('Area Numeri non valida');
   if (!renders.roomVerify.includes('EVIDENCE MAP') || !renders.roomVerify.includes('What Changed · storia della partita') || !renders.roomVerify.includes('Data Reliability Ledger') || !renders.roomVerify.includes('Fonti e news collegate')) throw new Error('Area Verifiche non valida');
   if (!renders.dashboard.includes('MODEL TRACK RECORD') || !renders.dashboard.includes('SOURCE HEALTH CENTER')) throw new Error('Track Record o Source Health Center non renderizzati');
   if (!renders.dashboard.includes('PRE-MATCH WINDOW') || renders.dashboard.includes('LIVE PULSE')) throw new Error('Dashboard non centrata sul prematch');
@@ -156,12 +156,21 @@ function createNode() {
   if (!preseason.includes('STAGIONE NON INIZIATA') || preseason.includes('CAPOLISTA') || preseason.includes('zone-ucl')) throw new Error('La pre-season viene presentata come classifica competitiva');
   test.state.tables['ita.1'] = originalTable;
 
+  const originalMatches = test.state.matches;
+  const monotonicLive = { ...pre, id: 'monotonic-state', state: 'in', home: { ...pre.home, score: 1 }, away: { ...pre.away, score: 0 }, status: { detail: '55’' } };
+  test.state.matches = [monotonicLive];
+  const regressed = test.preserveMonotonicMatchState({ ...monotonicLive, state: 'pre', home: { ...monotonicLive.home, score: 0 }, status: { detail: 'Programmato' } });
+  if (regressed.state !== 'in' || regressed.home.score !== 1 || !regressed.continuityGuard?.applied) throw new Error('Una regressione live→prematch non è stata bloccata');
+  const advanced = test.preserveMonotonicMatchState({ ...monotonicLive, state: 'post', home: { ...monotonicLive.home, score: 2 }, away: { ...monotonicLive.away, score: 1 } });
+  if (advanced.state !== 'post' || advanced.home.score !== 2) throw new Error('Una transizione monotona live→finale è stata bloccata');
+  test.state.matches = originalMatches;
+
   const modelMatch = { ...pre, id: 'strict-model-test', state: 'pre', date: new Date(Date.now() + 86400000).toISOString(), home: { ...pre.home, score: 0 }, away: { ...pre.away, score: 0 } };
   test.archivePreKickoffModel(modelMatch, { ...analysisPayload.data, event: { ...analysisPayload.data.event, state: 'pre', date: modelMatch.date }, probabilities: { home: 55, draw: 25, away: 20 } });
   if (!test.state.modelSnapshots[modelMatch.id] || new Date(test.state.modelSnapshots[modelMatch.id].capturedAt) >= new Date(modelMatch.date)) throw new Error('Snapshot pre-kickoff non congelato correttamente');
   test.reconcileModelSnapshots([{ ...modelMatch, state: 'post', home: { ...modelMatch.home, score: 2 }, away: { ...modelMatch.away, score: 0 } }]);
   const track = test.modelTrackStats();
-  if (track.settled.length !== 1 || track.accuracy !== 100 || !Number.isFinite(track.brier)) throw new Error('Riconciliazione Track Record o Brier non validi');
+  if (track.settled.length !== 1 || track.accuracy !== 100 || !Number.isFinite(track.brier) || !Number.isFinite(track.logLoss) || track.calibrationReady) throw new Error('Riconciliazione Track Record, Brier, log-loss o soglia calibrazione non validi');
   test.archivePreKickoffModel({ ...modelMatch, id: 'post-hoc-block', state: 'post' }, analysisPayload.data);
   if (test.state.modelSnapshots['post-hoc-block']) throw new Error('Il Track Record accetta un output post-hoc');
 
@@ -210,10 +219,12 @@ function createNode() {
   if (Object.keys(test.state.prematchVault).length !== 10) throw new Error('Fallback quota del Vault non riduce la conservazione a 10 partite');
 
   const css = fs.readFileSync('public/styles.css', 'utf8');
-  for (const marker of ['@media (max-width: 720px)', '@media (max-width: 420px)', 'prefers-reduced-motion', '.deep-dive.fallback', '.preseason-reading', '.operations-deck', '.availability-desk', '.match-history', '.match-control-room', '.match-room-tabs', '.readiness-gate', '.evidence-map', '.signal-lifecycle', '.lifecycle-card', '.prematch-total-intelligence', '.prematch-manifest', '.score-only-live', '.xi-intelligence', '.xi-team-grid', '.prematch-vault-banner', '.calendar-limit-note', '.deep-story p { margin: 0; color: var(--muted); font-size: 10.5px;']) {
+  for (const marker of ['@media (max-width: 720px)', '@media (max-width: 420px)', '@media (pointer: coarse)', 'prefers-reduced-motion', 'content-visibility: auto', 'width: min(1180px', '.deep-dive.fallback', '.preseason-reading', '.operations-deck', '.availability-desk', '.match-history', '.match-control-room', '.match-room-tabs', '.readiness-gate', '.evidence-map', '.signal-lifecycle', '.lifecycle-card', '.prematch-total-intelligence', '.prematch-manifest', '.score-only-live', '.xi-intelligence', '.xi-team-grid', '.prematch-vault-banner', '.calendar-limit-note', '.summary-decision-passport', '.model-passport', '.deep-story p { margin: 0; color: var(--muted); font-size: 11px;']) {
     if (!css.includes(marker)) throw new Error(`Regola CSS mancante: ${marker}`);
   }
-  console.log('Frontend test completato: viste, dossier, URL, fallback grafici e pre-season validi.');
+  const fontSizes = [...css.matchAll(/font-size:\s*([0-9.]+)px/g)].map(match => Number(match[1]));
+  if (!fontSizes.length || fontSizes.some(value => value < 11)) throw new Error('Microtesto CSS sotto 11px rilevato');
+  console.log('Frontend test completato: viste, dossier, responsive duale, metriche e fallback validi.');
 })().catch(error => {
   console.error('Frontend test fallito:', error.stack || error.message);
   process.exit(1);

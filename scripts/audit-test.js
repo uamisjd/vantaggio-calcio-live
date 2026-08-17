@@ -26,13 +26,13 @@ function noInvalidNumbers(value) {
 (async () => {
   const home = await request('/', 'text');
   check(home.response.status === 200, 'Homepage HTTP 200');
-  check(home.body.includes('V4.8') && home.body.includes('app.js?v=4.8.1'), 'Homepage V4.8.1 e cache key corrette');
+  check(home.body.includes('V4.9') && home.body.includes('app.js?v=4.9.0'), 'Homepage V4.9.0 e cache key corrette');
   check(home.response.headers.get('x-content-type-options') === 'nosniff', 'Header nosniff presente');
   check(home.response.headers.get('referrer-policy') === 'strict-origin-when-cross-origin', 'Referrer policy sicura presente');
 
   const [manifest, favicon, app, css, status] = await Promise.all([
-    request('/manifest.webmanifest'), request('/favicon.svg', 'text'), request('/app.js?v=4.8.1', 'text'),
-    request('/styles.css?v=4.8.1', 'text'), request('/api/status')
+    request('/manifest.webmanifest'), request('/favicon.svg', 'text'), request('/app.js?v=4.9.0', 'text'),
+    request('/styles.css?v=4.9.0', 'text'), request('/api/status')
   ]);
   check(manifest.response.status === 200 && manifest.body?.start_url === '/#dashboard' && manifest.body?.display === 'standalone', 'Manifest PWA valido');
   check(favicon.response.status === 200 && favicon.body.includes('<svg'), 'Favicon SVG valida');
@@ -58,10 +58,18 @@ function noInvalidNumbers(value) {
   check(app.body.includes('matchingMatches.slice(0, 100)') && app.body.includes('calendar-limit-note'), 'Regia globale limitata per prestazioni con giornate complete accessibili');
   check(css.body.includes('.prematch-total-intelligence') && css.body.includes('.prematch-manifest') && css.body.includes('.score-only-live'), 'Design system Pre-Match Total Intelligence servito');
   check(css.body.includes('.xi-intelligence') && css.body.includes('.xi-team-grid') && css.body.includes('.prematch-vault-banner'), 'Design responsive XI Intelligence e Pre-Match Vault servito');
+  const pixelFonts = [...css.body.matchAll(/font-size:\s*([0-9.]+)px/g)].map(match => Number(match[1]));
+  check(pixelFonts.length > 0 && pixelFonts.every(value => value >= 11), 'Nessun microtesto CSS sotto 11px');
+  check(css.body.includes('@media (pointer: coarse)') && css.body.includes('content-visibility: auto') && css.body.includes('width: min(1180px'), 'Workspace desktop, touch target e rendering differito presenti');
+  check(app.body.includes('DECISION PASSPORT') && app.body.includes('MODEL PASSPORT') && app.body.includes('Log-loss'), 'Decision Passport, Model Passport e log-loss visibili');
+  check(app.body.includes('preserveMonotonicMatchState') && app.body.includes('continuityGuard'), 'Guardia monotona degli stati partita presente');
   check(app.response.headers.get('cache-control')?.includes('immutable') && css.response.headers.get('cache-control')?.includes('immutable'), 'Asset versionati serviti con cache immutabile');
   check(status.response.status === 200 && status.body?.ok && status.body.timezone === 'Europe/Rome', 'Status API e timezone validi');
   check(Array.isArray(status.body?.standingsLeagues) && status.body.standingsLeagues.length >= 12, 'Catalogo classifiche estese valido');
   check(Array.isArray(status.body?.globalCompetitions) && status.body.globalCompetitions.length >= 40 && status.body.globalPolicy?.includes('competitivo globale'), 'Catalogo competitivo globale esteso e policy dichiarata');
+  const healthInitial = await request('/api/health');
+  check(healthInitial.response.status === 200 && healthInitial.body?.resilience?.staleFallback === 'bounded' && healthInitial.body.resilience.circuitFailureThreshold === 4, 'Circuit breaker e stale fallback limitato dichiarati');
+  check(Array.isArray(healthInitial.body?.sources) && healthInitial.body.sources.every(source => ['non_testata', 'operativa', 'operativa_con_errori', 'degradata', 'circuito_aperto'].includes(source.state)), 'Stati salute fonte validi');
 
   const today = status.body.today;
   const day = new Date(`${today}T12:00:00Z`);
@@ -90,14 +98,17 @@ function noInvalidNumbers(value) {
   dossiers.forEach(({ match, power, intel }) => {
     const p = power.body?.data;
     const i = intel.body?.data;
-    check(power.response.status === 200 && power.body?.ok && p?.engine?.version === '2.1', `Power Model valido: ${match.league.id}`);
+    check(power.response.status === 200 && power.body?.ok && p?.engine?.version === '3.0', `Power Model valido: ${match.league.id}`);
+    check(['ready', 'caution', 'hold'].includes(p?.decision?.state) && Array.isArray(p?.decision?.unknowns), `Decision Gate valido: ${match.league.id}`);
+    check(Number.isFinite(p?.ensemble?.modelWeight) && Number.isFinite(p?.ensemble?.marketWeight) && p.ensemble.modelWeight + p.ensemble.marketWeight === 100, `Pesi ensemble trasparenti: ${match.league.id}`);
+    check(Number.isFinite(p?.engine?.effectiveSample) && p?.engine?.diagnostics?.recencyHalfLifeDays === 120 && p?.methodology?.includes('H2H'), `Model Passport e recency validi: ${match.league.id}`);
     const probabilitySum = p?.probabilities ? p.probabilities.home + p.probabilities.draw + p.probabilities.away : 0;
     check(Math.abs(probabilitySum - 100) <= 1, `Probabilità 1-X-2 coerenti: ${match.league.id}`);
     check(noInvalidNumbers(power.body), `Power Model senza numeri invalidi: ${match.league.id}`);
     check(intel.response.status === 200 && intel.body?.ok && i?.engine?.version === '1.3', `Match Intelligence valida: ${match.league.id}`);
     const xi = i?.lineupIntelligence;
     check(Array.isArray(xi?.teams) && xi.teams.length === 2 && ['ufficiale', 'probabili_parziali', 'non_disponibile'].includes(xi.status), `XI Intelligence presente: ${match.league.id}`);
-    check(xi?.teams?.every(team => ['ufficiale', 'probabile', 'non_disponibile'].includes(team.mode) && Number.isFinite(team.confidence) && Number.isFinite(team.strength) && Number.isFinite(team.continuity)), `Punteggi XI distinti e validi: ${match.league.id}`);
+    check(xi?.teams?.every(team => ['ufficiale', 'probabile', 'non_disponibile'].includes(team.mode) && (team.mode === 'non_disponibile' ? team.confidence === null && team.strength === null : Number.isFinite(team.confidence) && Number.isFinite(team.strength))), `Punteggi XI distinti e validi o esplicitamente non disponibili: ${match.league.id}`);
     check(xi?.teams?.every(team => team.mode === 'non_disponibile' || team.selected?.length === 11), `Probabile/ufficiale completa o non pubblicata: ${match.league.id}`);
     check(xi?.teams?.every(team => team.importantMissing?.every(player => player.category && player.evidence?.length && Number.isFinite(player.importance))), `Assenze importanti documentate: ${match.league.id}`);
     check(Array.isArray(i?.availability?.teams) && i.availability.teams.length === 2 && Array.isArray(i.availability.sources) && Number.isFinite(i.availability.score), `Availability Intelligence valida: ${match.league.id}`);

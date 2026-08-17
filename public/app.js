@@ -247,6 +247,10 @@ function trackFixtureChanges(matches) {
 }
 
 function persistModelSnapshots() {
+  const entries = Object.entries(state.modelSnapshots)
+    .sort((a, b) => new Date(b[1].capturedAt || 0) - new Date(a[1].capturedAt || 0))
+    .slice(0, 300);
+  state.modelSnapshots = Object.fromEntries(entries);
   localStorage.setItem('vantaggio:modelSnapshots:v1', JSON.stringify(state.modelSnapshots));
 }
 
@@ -260,10 +264,29 @@ function archivePreKickoffModel(match, analysis) {
     leagueId: match.league.id, leagueLabel: match.league.label,
     home: match.home.name, away: match.away.name,
     probabilities: { home: Number(analysis.probabilities.home), draw: Number(analysis.probabilities.draw), away: Number(analysis.probabilities.away) },
+    statisticalProbabilities: analysis.statisticalProbabilities ? { ...analysis.statisticalProbabilities } : null,
+    marketProbabilities: analysis.market?.outcome ? {
+      home: Math.round(Number(analysis.market.outcome.home) * 100),
+      draw: Math.round(Number(analysis.market.outcome.draw) * 100),
+      away: Math.round(Number(analysis.market.outcome.away) * 100)
+    } : null,
+    ensemble: analysis.ensemble ? { ...analysis.ensemble } : null,
+    decision: analysis.decision ? { state: analysis.decision.state, label: analysis.decision.label, unknowns: analysis.decision.unknowns || [] } : null,
     quality: Number(analysis.engine?.quality || 0), engine: analysis.engine?.version || analysis.engine?.name || 'Power Model',
+    effectiveSample: Number(analysis.engine?.effectiveSample || 0),
     topSignal: analysis.signals?.[0] ? { code: analysis.signals[0].code, label: analysis.signals[0].label, probability: analysis.signals[0].probability } : null
   };
   persistModelSnapshots();
+}
+
+function scoreProbabilityTriplet(probabilities, actual) {
+  if (!probabilities || !['home', 'draw', 'away'].every(key => Number.isFinite(Number(probabilities[key])))) return null;
+  const normalized = {};
+  const total = ['home', 'draw', 'away'].reduce((sum, key) => sum + Math.max(0, Number(probabilities[key])), 0) || 100;
+  ['home', 'draw', 'away'].forEach(key => { normalized[key] = Math.max(0, Number(probabilities[key])) / total; });
+  const brier = ['home', 'draw', 'away'].reduce((sum, key) => sum + (normalized[key] - (key === actual ? 1 : 0)) ** 2, 0) / 2;
+  const actualProbability = Math.max(0.001, normalized[actual]);
+  return { brier: Math.round(brier * 1000) / 1000, logLoss: Math.round(-Math.log(actualProbability) * 1000) / 1000 };
 }
 
 function reconcileModelSnapshots(matches) {
@@ -276,8 +299,15 @@ function reconcileModelSnapshots(matches) {
     const actual = homeScore > awayScore ? 'home' : awayScore > homeScore ? 'away' : 'draw';
     const probabilities = snapshot.probabilities;
     const predicted = ['home', 'draw', 'away'].sort((a, b) => probabilities[b] - probabilities[a])[0];
-    const brier = ['home', 'draw', 'away'].reduce((sum, key) => sum + ((probabilities[key] / 100) - (key === actual ? 1 : 0)) ** 2, 0) / 2;
-    snapshot.result = { homeScore, awayScore, actual, predicted, hit: predicted === actual, brier: Math.round(brier * 1000) / 1000 };
+    const consensusScore = scoreProbabilityTriplet(probabilities, actual);
+    const statisticalScore = scoreProbabilityTriplet(snapshot.statisticalProbabilities, actual);
+    const marketScore = scoreProbabilityTriplet(snapshot.marketProbabilities, actual);
+    snapshot.result = {
+      homeScore, awayScore, actual, predicted, hit: predicted === actual,
+      brier: consensusScore.brier, logLoss: consensusScore.logLoss,
+      statistical: statisticalScore,
+      market: marketScore
+    };
     snapshot.settledAt = new Date().toISOString();
     changed = true;
   });
@@ -306,10 +336,34 @@ function modelTrackStats() {
   const hits = settled.filter(item => item.result.hit).length;
   const accuracy = settled.length ? Math.round(hits / settled.length * 100) : null;
   const averageConfidence = settled.length ? Math.round(settled.reduce((sum, item) => sum + Math.max(item.probabilities.home, item.probabilities.draw, item.probabilities.away), 0) / settled.length) : null;
+  const logLossRows = settled.filter(item => Number.isFinite(item.result.logLoss));
+  const marketRows = settled.filter(item => Number.isFinite(item.result.market?.brier));
+  const statisticalRows = settled.filter(item => Number.isFinite(item.result.statistical?.brier));
+  const bins = new Map();
+  settled.forEach(item => {
+    const confidence = Math.max(item.probabilities.home, item.probabilities.draw, item.probabilities.away) / 100;
+    const key = Math.min(9, Math.floor(confidence * 10));
+    const bin = bins.get(key) || { count: 0, confidence: 0, hits: 0 };
+    bin.count += 1; bin.confidence += confidence; bin.hits += item.result.hit ? 1 : 0;
+    bins.set(key, bin);
+  });
+  const ece = settled.length ? [...bins.values()].reduce((sum, bin) => {
+    const averageBinConfidence = bin.confidence / bin.count;
+    const binAccuracy = bin.hits / bin.count;
+    return sum + (bin.count / settled.length) * Math.abs(binAccuracy - averageBinConfidence);
+  }, 0) : null;
+  const holdCount = all.filter(item => item.decision?.state === 'hold').length;
   return {
     all, settled, pending: all.length - settled.length, hits, accuracy, averageConfidence,
     calibrationGap: settled.length ? accuracy - averageConfidence : null,
-    brier: settled.length ? Math.round(settled.reduce((sum, item) => sum + item.result.brier, 0) / settled.length * 1000) / 1000 : null
+    calibrationReady: settled.length >= 30,
+    ece: ece == null ? null : Math.round(ece * 1000) / 1000,
+    brier: settled.length ? Math.round(settled.reduce((sum, item) => sum + item.result.brier, 0) / settled.length * 1000) / 1000 : null,
+    logLoss: logLossRows.length ? Math.round(logLossRows.reduce((sum, item) => sum + item.result.logLoss, 0) / logLossRows.length * 1000) / 1000 : null,
+    marketBrier: marketRows.length ? Math.round(marketRows.reduce((sum, item) => sum + item.result.market.brier, 0) / marketRows.length * 1000) / 1000 : null,
+    statisticalBrier: statisticalRows.length ? Math.round(statisticalRows.reduce((sum, item) => sum + item.result.statistical.brier, 0) / statisticalRows.length * 1000) / 1000 : null,
+    holdCount,
+    coverage: all.length ? Math.round((all.length - holdCount) / all.length * 100) : null
   };
 }
 
@@ -391,7 +445,8 @@ function captureSignalLifecycle(match, requestedStage = 'AUTO') {
     readiness: readiness.tone, maturity: readiness.maturity,
     probabilities: analysis.probabilities, lineup: intelligence.lineups?.official,
     availability: intelligence.availability?.score, availabilityCount: intelligence.availability?.structuredCount,
-    reliability: intelligence.reliability?.overall, topSignal: topSignal ? [topSignal.code, topSignal.probability] : null
+    reliability: intelligence.reliability?.overall, decision: analysis.decision?.state || null,
+    topSignal: topSignal ? [topSignal.code, topSignal.probability] : null
   });
   const previous = existing.snapshots[existing.snapshots.length - 1];
   const normalizedStage = ['T-60', 'T-30', 'T-10'].includes(requestedStage) ? requestedStage : existing.snapshots.length ? 'UPDATE' : 'FIRST';
@@ -402,6 +457,8 @@ function captureSignalLifecycle(match, requestedStage = 'AUTO') {
     stage: normalizedStage, first: existing.snapshots.length === 0,
     capturedAt: now.toISOString(), minutesToKickoff: Math.max(0, Math.round((kickoffMs - now.getTime()) / 60000)),
     readiness: readiness.tone, readinessLabel: readiness.title, maturity: readiness.maturity,
+    decision: analysis.decision ? { state: analysis.decision.state, label: analysis.decision.label } : null,
+    modelVersion: analysis.engine?.version || null,
     probabilities: { home: Number(analysis.probabilities.home), draw: Number(analysis.probabilities.draw), away: Number(analysis.probabilities.away) },
     topSignal: topSignal ? { code: topSignal.code, label: topSignal.label, probability: Number(topSignal.probability) } : null,
     lineupsOfficial: Boolean(intelligence.lineups?.official),
@@ -433,8 +490,25 @@ function reconcileSignalLifecycles(matches) {
   if (changed) persistSignalLifecycle();
 }
 
+function preserveMonotonicMatchState(match) {
+  const previous = state.matches.find(item => item.id === match.id) || state.fixtureLedger[match.id];
+  if (!previous) return match;
+  const rank = { pre: 0, in: 1, post: 2 };
+  if ((rank[previous.state] ?? 0) <= (rank[match.state] ?? 0)) return match;
+  const previousHomeScore = Number(previous.home?.score ?? previous.homeScore);
+  const previousAwayScore = Number(previous.away?.score ?? previous.awayScore);
+  return {
+    ...match,
+    state: previous.state,
+    home: { ...match.home, score: Number.isFinite(previousHomeScore) ? previousHomeScore : match.home.score },
+    away: { ...match.away, score: Number.isFinite(previousAwayScore) ? previousAwayScore : match.away.score },
+    status: previous.status || match.status,
+    continuityGuard: { applied: true, reason: `Transizione regressiva ${previous.state}→${match.state} bloccata`, observedAt: new Date().toISOString() }
+  };
+}
+
 function applyMatches(payload) {
-  const incoming = payload.data?.matches || [];
+  const incoming = (payload.data?.matches || []).map(preserveMonotonicMatchState);
   trackFixtureChanges(incoming);
   state.matches = incoming;
   reconcileModelSnapshots(state.matches);
@@ -575,15 +649,22 @@ function updateSyncStatus(loading = false) {
     return;
   }
   const failed = state.errors.matches && state.errors.news;
+  const stale = Boolean(state.dataMeta.matches?.stale || state.dataMeta.news?.stale);
   if (failed) {
     el.classList.add('error');
     el.innerHTML = '<i></i><span>Fonti non disponibili</span>';
     sourceDot?.classList.add('error');
+  } else if (stale) {
+    el.classList.add('stale');
+    const ageMs = Math.max(state.dataMeta.matches?.staleAgeMs || 0, state.dataMeta.news?.staleAgeMs || 0);
+    el.innerHTML = `<i></i><span>Fallback verificato · ${Math.max(1, Math.round(ageMs / 60000))} min</span>`;
+    sourceDot?.classList.add('stale');
+    sourceDot?.classList.remove('error');
   } else {
     el.classList.add('ok');
     const updated = state.dataMeta.matches?.fetchedAt || new Date().toISOString();
     el.innerHTML = `<i></i><span>Aggiornato ${escapeHtml(relativeTime(updated))}</span>`;
-    sourceDot?.classList.remove('error');
+    sourceDot?.classList.remove('error', 'stale');
   }
 }
 
@@ -654,8 +735,9 @@ async function loadPowerPicks() {
     });
   }));
   state.powerPicks = results.filter(item => item.status === 'fulfilled').map(item => item.value).sort((a, b) => {
-    const aScore = (a.analysis.signals?.[0]?.probability || 0) * (a.analysis.engine?.quality || 0);
-    const bScore = (b.analysis.signals?.[0]?.probability || 0) * (b.analysis.engine?.quality || 0);
+    const gateWeight = analysis => analysis.decision?.state === 'ready' ? 1 : analysis.decision?.state === 'caution' ? 0.72 : 0.25;
+    const aScore = (a.analysis.signals?.[0]?.probability || 0) * (a.analysis.engine?.quality || 0) * gateWeight(a.analysis);
+    const bScore = (b.analysis.signals?.[0]?.probability || 0) * (b.analysis.engine?.quality || 0) * gateWeight(b.analysis);
     return bScore - aScore;
   }).slice(0, 4);
   state.powerPicks.signature = signature;
@@ -666,7 +748,8 @@ async function loadPowerPicks() {
 function powerPickItem(item, index) {
   const signal = item.analysis.signals?.[0];
   if (!signal) return radarItem(item.match, index);
-  return `<article class="power-pick" data-match="${escapeHtml(item.match.id)}" role="button" tabindex="0" aria-label="Apri l’analisi di ${escapeHtml(item.match.home.name)} contro ${escapeHtml(item.match.away.name)}"><span class="radar-rank">${String(index + 1).padStart(2, '0')}</span><div><strong>${escapeHtml(item.match.home.name)} — ${escapeHtml(item.match.away.name)}</strong><small>${escapeHtml(signal.label)} · qualità ${item.analysis.engine.quality}/100</small></div><b>${signal.probability}<small>%</small></b></article>`;
+  const gate = item.analysis.decision?.label || 'CAUTION';
+  return `<article class="power-pick gate-${escapeHtml(gate.toLowerCase())}" data-match="${escapeHtml(item.match.id)}" role="button" tabindex="0" aria-label="Apri l’analisi di ${escapeHtml(item.match.home.name)} contro ${escapeHtml(item.match.away.name)}"><span class="radar-rank">${String(index + 1).padStart(2, '0')}</span><div><strong>${escapeHtml(item.match.home.name)} — ${escapeHtml(item.match.away.name)}</strong><small>${escapeHtml(signal.label)} · qualità ${item.analysis.engine.quality}/100 · ${escapeHtml(gate)}</small></div><b>${gate === 'HOLD' ? '—' : signal.probability}<small>${gate === 'HOLD' ? '' : '%'}</small></b></article>`;
 }
 
 function competitionPulse(matches) {
@@ -692,14 +775,22 @@ function kickoffWatchItem(match) {
 function renderTrackRecord() {
   const stats = modelTrackStats();
   const recent = stats.settled.slice(0, 3);
-  return `<article class="track-record"><header><div><span class="section-code">MODEL TRACK RECORD</span><h2>Pronostici congelati prima del via</h2></div><span class="track-lock">${icon('shield')} SOLO PRE-KICKOFF</span></header><div class="track-metrics"><div><strong>${stats.settled.length}</strong><span>verificati</span></div><div><strong>${stats.accuracy == null ? '–' : `${stats.accuracy}%`}</strong><span>esito 1-X-2</span></div><div><strong>${stats.brier == null ? '–' : stats.brier.toFixed(3)}</strong><span>Brier norm. · 0 meglio</span></div><div><strong>${stats.pending}</strong><span>in attesa</span></div></div><div class="track-results">${recent.length ? recent.map(item => `<div class="track-result ${item.result.hit ? 'hit' : 'miss'}"><span>${item.result.hit ? 'HIT' : 'MISS'}</span><strong>${escapeHtml(item.home)} ${item.result.homeScore}–${item.result.awayScore} ${escapeHtml(item.away)}</strong><small>${escapeHtml(item.result.predicted === 'home' ? item.home : item.result.predicted === 'away' ? item.away : 'Pareggio')} · Brier ${item.result.brier.toFixed(3)}</small></div>`).join('') : `<div class="specialty-empty compact">${icon('shield')}<div><strong>Archivio pronto</strong><p>La prima lettura vista prima del kickoff viene resa immutabile e valutata solo dopo il finale. Nessun backfill retroattivo.</p></div></div>`}</div><p class="desk-method">${stats.settled.length ? `Calibrazione: fiducia media ${stats.averageConfidence}%, accuratezza ${stats.accuracy}%, gap ${stats.calibrationGap > 0 ? '+' : ''}${stats.calibrationGap} punti. ` : ''}Archivio locale a questo browser: trasparente, gratuito e non condiviso tra dispositivi.</p></article>`;
+  const calibration = stats.calibrationReady
+    ? `ECE ${stats.ece.toFixed(3)} · fiducia media ${stats.averageConfidence}% · accuratezza ${stats.accuracy}%.`
+    : `Calibrazione preliminare: ${stats.settled.length}/30 finali minimi; non viene ancora dichiarata affidabile.`;
+  const benchmark = stats.marketBrier == null ? '' : ` Benchmark Brier mercato ${stats.marketBrier.toFixed(3)}${stats.statisticalBrier == null ? '' : ` · solo modello ${stats.statisticalBrier.toFixed(3)}`}.`;
+  return `<article class="track-record"><header><div><span class="section-code">MODEL TRACK RECORD</span><h2>Pronostici congelati prima del via</h2></div><span class="track-lock">${icon('shield')} SOLO PRE-KICKOFF</span></header><div class="track-metrics"><div><strong>${stats.settled.length}</strong><span>verificati</span></div><div><strong>${stats.accuracy == null ? '–' : `${stats.accuracy}%`}</strong><span>esito 1-X-2</span></div><div><strong>${stats.brier == null ? '–' : stats.brier.toFixed(3)}</strong><span>Brier · 0 meglio</span></div><div><strong>${stats.logLoss == null ? '–' : stats.logLoss.toFixed(3)}</strong><span>Log-loss · 0 meglio</span></div><div><strong>${stats.coverage == null ? '–' : `${stats.coverage}%`}</strong><span>copertura non-HOLD</span></div><div><strong>${stats.pending}</strong><span>in attesa</span></div></div><div class="track-results">${recent.length ? recent.map(item => `<div class="track-result ${item.result.hit ? 'hit' : 'miss'}"><span>${item.result.hit ? 'HIT' : 'MISS'}</span><strong>${escapeHtml(item.home)} ${item.result.homeScore}–${item.result.awayScore} ${escapeHtml(item.away)}</strong><small>${escapeHtml(item.result.predicted === 'home' ? item.home : item.result.predicted === 'away' ? item.away : 'Pareggio')} · Brier ${item.result.brier.toFixed(3)}${Number.isFinite(item.result.logLoss) ? ` · Log-loss ${item.result.logLoss.toFixed(3)}` : ''} · ${escapeHtml(item.decision?.label || 'gate storico n/d')}</small></div>`).join('') : `<div class="specialty-empty compact">${icon('shield')}<div><strong>Archivio pronto</strong><p>La prima lettura vista prima del kickoff viene resa immutabile e valutata solo dopo il finale. Nessun backfill retroattivo.</p></div></div>`}</div><p class="desk-method">${calibration}${benchmark} Archivio locale a questo browser: trasparente, gratuito e non condiviso tra dispositivi.</p></article>`;
 }
 
 function renderSourceHealth() {
   const snapshot = state.sourceHealth;
   const active = (snapshot?.sources || []).filter(source => source.calls).slice(0, 5);
   const healthy = active.filter(source => source.state === 'operativa' || source.state === 'operativa_con_errori').length;
-  return `<article class="source-health"><header><div><span class="section-code">SOURCE HEALTH CENTER</span><h2>Fonti, freschezza e latenza</h2></div><span class="health-total"><i></i>${active.length ? `${healthy}/${active.length} operative` : 'telemetria in avvio'}</span></header><div class="source-health-list">${active.length ? active.map(source => `<div class="source-health-row"><span class="health-dot ${escapeHtml(source.state)}"></span><div><strong>${escapeHtml(source.label)}</strong><small>${escapeHtml(source.coverage || 'Copertura tecnica osservata')}</small><small>${source.lastSuccessAt ? `risposta ${escapeHtml(relativeTime(source.lastSuccessAt))}` : 'nessuna risposta valida'} · ${source.successes}/${source.calls} valide${source.failures ? ` · ${source.failures} errori` : ''}</small></div><b>${source.averageLatencyMs == null ? '–' : `${source.averageLatencyMs} ms`}</b></div>`).join('') : `<div class="specialty-empty compact">${icon('radar')}<div><strong>Misurazione in corso</strong><p>Il pannello si popola con le chiamate reali del server, senza esporre credenziali o URL sensibili.</p></div></div>`}</div><p class="desk-method">${escapeHtml(snapshot?.rule || 'Lo stato tecnico non equivale alla completezza editoriale della fonte.')}</p></article>`;
+  return `<article class="source-health"><header><div><span class="section-code">SOURCE HEALTH CENTER</span><h2>Fonti, freschezza e latenza</h2></div><span class="health-total"><i></i>${active.length ? `${healthy}/${active.length} operative` : 'telemetria in avvio'}</span></header><div class="source-health-list">${active.length ? active.map(source => {
+    const circuitNote = source.state === 'circuito_aperto' && source.circuit?.retryAt ? ` · retry ${escapeHtml(relativeTime(source.circuit.retryAt))}` : '';
+    const stateLabel = source.state === 'circuito_aperto' ? 'CIRCUITO APERTO' : source.state === 'degradata' ? 'DEGRADATA' : source.state === 'operativa_con_errori' ? 'OPERATIVA CON ERRORI' : 'OPERATIVA';
+    return `<div class="source-health-row"><span class="health-dot ${escapeHtml(source.state)}"></span><div><strong>${escapeHtml(source.label)} <em>${stateLabel}</em></strong><small>${escapeHtml(source.coverage || 'Copertura tecnica osservata')}</small><small>${source.lastSuccessAt ? `risposta ${escapeHtml(relativeTime(source.lastSuccessAt))}` : 'nessuna risposta valida'} · ${source.successes}/${source.calls} valide${source.failures ? ` · ${source.failures} errori` : ''}${circuitNote}</small></div><b>${source.averageLatencyMs == null ? '–' : `${source.averageLatencyMs} ms`}</b></div>`;
+  }).join('') : `<div class="specialty-empty compact">${icon('radar')}<div><strong>Misurazione in corso</strong><p>Il pannello si popola con le chiamate reali del server, senza esporre credenziali o URL sensibili.</p></div></div>`}</div><p class="desk-method">${escapeHtml(snapshot?.rule || 'Lo stato tecnico non equivale alla completezza editoriale della fonte.')}</p></article>`;
 }
 
 function renderDashboard() {
@@ -714,6 +805,7 @@ function renderDashboard() {
   const coveredCompetitions = state.coverage.competitions || new Set(state.matches.map(match => match.league.id)).size;
   const [busyLeague, busyCount] = competitionPulse(todayPrematch);
   const strongest = state.powerPicks[0];
+  const strongestDecision = strongest?.analysis?.decision;
   const recentChanges = state.changeLog.slice(0, 5);
   const unreadChanges = state.changeLog.filter(item => !item.seen).length;
   const watchedKickoffs = state.matches.filter(match => state.favorites.has(match.id) && match.state === 'pre').sort((a, b) => new Date(a.date) - new Date(b.date)).slice(0, 4);
@@ -725,7 +817,7 @@ function renderDashboard() {
       <div class="briefing-grid">
         <article class="briefing-card prematch-brief"><span>PRE-MATCH WINDOW</span><strong>${nextPrematch ? `${nextPrematch.home.name}–${nextPrematch.away.name}` : 'Nessun kickoff imminente'}</strong><p>${nextPrematch ? `${displayDate(nextPrematch.date)} alle ${fmtTime.format(new Date(nextPrematch.date))}: apri il dossier totale prima del via.` : 'Il calendario si aggiorna quando le fonti pubblicano nuovi eventi.'}</p></article>
         <article class="briefing-card"><span>AGENDA PRE-MATCH</span><strong>${todayPrematch.length} da studiare oggi · ${in48h.length} entro 48h</strong><p>${busyCount ? `${busyLeague} è la competizione più presente con ${busyCount} incontri futuri.` : 'Il calendario prematch si amplia automaticamente.'}</p></article>
-        <article class="briefing-card intelligence-brief"><span>INTELLIGENCE SIGNAL</span><strong>${strongest?.analysis?.signals?.[0] ? `${strongest.analysis.signals[0].label} · ${strongest.analysis.signals[0].probability}%` : featured ? 'Deep Analysis disponibile' : 'Analisi in preparazione'}</strong><p>${strongest ? `${strongest.match.home.name}–${strongest.match.away.name}, qualità dati ${strongest.analysis.engine.quality}/100.` : featured ? `Apri ${escapeHtml(featured.home.name)}–${escapeHtml(featured.away.name)} per il dossier con fonti, limiti e red flags.` : 'Il sistema sta selezionando le partite con il campione più leggibile.'}</p></article>
+        <article class="briefing-card intelligence-brief"><span>DECISION GATE</span><strong>${strongestDecision ? `${strongestDecision.label} · ${strongestDecision.title}` : featured ? 'Deep Analysis disponibile' : 'Analisi in preparazione'}</strong><p>${strongest ? `${strongest.match.home.name}–${strongest.match.away.name}, qualità ${strongest.analysis.engine.quality}/100${strongestDecision?.state === 'hold' ? ': il sistema si astiene.' : ` · ${strongest.analysis.signals?.[0]?.label || 'segnale in verifica'}.`}` : featured ? `Apri ${escapeHtml(featured.home.name)}–${escapeHtml(featured.away.name)} per il dossier con fonti, limiti e red flags.` : 'Il sistema sta selezionando le partite con il campione più leggibile.'}</p></article>
         <article class="briefing-card coverage-brief"><span>COVERAGE DESK</span><strong>${coveredCompetitions} competizioni monitorate</strong><p>Calendario globale, feed gratuiti e controlli di qualità senza abbonamenti.</p></article>
       </div>
     </section>
@@ -1057,7 +1149,7 @@ function openMatch(id) {
   $('#modalLayer').hidden = false;
   document.body.style.overflow = 'hidden';
   setTimeout(() => $('.modal-close', modal)?.focus(), 20);
-  loadIntelligence(match).then(() => loadAnalysis(match));
+  void Promise.allSettled([loadIntelligence(match), loadAnalysis(match)]);
 }
 
 function refreshMatchRoom(match) {
@@ -1143,21 +1235,27 @@ function renderPowerAnalysis(data) {
   }
   const signals = data.signals || [];
   const primary = signals[0];
+  const decision = data.decision || { state: quality >= 60 ? 'caution' : 'hold', label: quality >= 60 ? 'CAUTION' : 'HOLD', title: 'Gate storico', reason: 'Questa fotografia non espone ancora il nuovo passaporto del modello.', unknowns: [] };
+  const diagnostics = data.engine?.diagnostics || {};
+  const generatedAt = data.engine?.generatedAt ? new Date(data.engine.generatedAt) : null;
+  const generatedLabel = generatedAt && !Number.isNaN(generatedAt.getTime()) ? `${displayNewsDate(generatedAt)} · ${fmtTime.format(generatedAt)}` : 'timestamp non disponibile';
   const marketOutcome = data.market?.outcome ? {
     home: Math.round(data.market.outcome.home * 100), draw: Math.round(data.market.outcome.draw * 100), away: Math.round(data.market.outcome.away * 100)
   } : null;
   const h2hRows = (data.h2h?.events || []).slice(0, 5).map(event => `<div class="h2h-row"><span>${escapeHtml(displayDate(event.date))}</span><div><strong>${escapeHtml(event.home.name)}</strong><b>${event.home.score}–${event.away.score}</b><strong>${escapeHtml(event.away.name)}</strong></div></div>`).join('');
   return `<section class="power-analysis">
-    <header class="power-title"><div><span class="power-mark">POWER MODEL 2.1</span><h3>Analisi quantitativa</h3></div><div class="quality-score" style="--quality:${quality}"><span><b>${quality}</b><small>qualità ${qualityLabel(quality)}</small></span></div></header>
-    ${primary ? `<article class="primary-signal"><div><span>SEGNALE PIÙ FORTE</span><h4>${escapeHtml(primary.label)}</h4><p>${escapeHtml(primary.reason)}</p></div><strong>${primary.probability}<small>%</small></strong><i class="risk-tag ${String(data.assessment?.risk || '').toLowerCase()}">Rischio ${escapeHtml(data.assessment?.risk || 'n/d')}</i></article>` : ''}
-    <section class="power-block"><header><h4>Probabilità 1-X-2</h4><span>Consenso statistico${data.market?.outcome ? ' + mercato' : ''}</span></header><div class="probabilities">${probabilityBar(data.event.home.name, data.probabilities.home, 'home')}${probabilityBar('Pareggio', data.probabilities.draw, 'draw')}${probabilityBar(data.event.away.name, data.probabilities.away, 'away')}</div><div class="model-note">Solo modello: ${data.statisticalProbabilities.home}% · ${data.statisticalProbabilities.draw}% · ${data.statisticalProbabilities.away}%</div></section>
+    <header class="power-title"><div><span class="power-mark">POWER MODEL ${escapeHtml(data.engine?.version || '3.0')}</span><h3>Analisi quantitativa con gate</h3></div><div class="quality-score" style="--quality:${quality}"><span><b>${quality}</b><small>qualità ${qualityLabel(quality)}</small></span></div></header>
+    <section class="decision-passport ${escapeHtml(decision.state)}"><header><span>DECISION PASSPORT</span><b>${escapeHtml(decision.label)}</b></header><h4>${escapeHtml(decision.title)}</h4><p>${escapeHtml(decision.reason)}</p>${decision.unknowns?.length ? `<div>${decision.unknowns.map(item => `<span>${escapeHtml(item)}</span>`).join('')}</div>` : '<div><span>Nessun vuoto critico registrato</span></div>'}</section>
+    <section class="model-passport"><header><span>MODEL PASSPORT</span><strong>snapshot ${escapeHtml(generatedLabel)}</strong></header><div><span><small>Motore</small><b>v${escapeHtml(data.engine?.version || 'n/d')}</b></span><span><small>Campione effettivo</small><b>${diagnostics.effectiveSample ?? data.engine?.effectiveSample ?? '–'}</b></span><span><small>Half-life</small><b>${diagnostics.recencyHalfLifeDays ? `${diagnostics.recencyHalfLifeDays}g` : '–'}</b></span><span><small>Shrinkage</small><b>${diagnostics.priorWeight ? `prior ${diagnostics.priorWeight}` : '–'}</b></span><span><small>Low-score</small><b>${escapeHtml(diagnostics.lowScoreCorrection?.method || 'n/d')}</b></span><span><small>Pesi</small><b>M ${data.ensemble?.modelWeight ?? 100}% · K ${data.ensemble?.marketWeight ?? 0}%</b></span></div></section>
+    ${primary && decision.state !== 'hold' ? `<article class="primary-signal"><div><span>SEGNALE ATTIVO · ${escapeHtml(decision.label)}</span><h4>${escapeHtml(primary.label)}</h4><p>${escapeHtml(primary.reason)}</p></div><strong>${primary.probability}<small>%</small></strong><i class="risk-tag ${String(data.assessment?.risk || '').toLowerCase()}">Rischio ${escapeHtml(data.assessment?.risk || 'n/d')}</i></article>` : `<article class="primary-signal gate-hold"><div><span>ASTENSIONE ATTIVA</span><h4>Nessun segnale promosso</h4><p>Le probabilità restano consultabili per trasparenza, ma non vengono presentate come scelta operativa.</p></div><strong>—</strong><i class="risk-tag alto">HOLD</i></article>`}
+    <section class="power-block"><header><h4>Probabilità 1-X-2</h4><span>${data.market?.outcome ? 'Consenso modello + mercato' : 'Solo modello con shrinkage'}</span></header><div class="probabilities">${probabilityBar(data.event.home.name, data.probabilities.home, 'home')}${probabilityBar('Pareggio', data.probabilities.draw, 'draw')}${probabilityBar(data.event.away.name, data.probabilities.away, 'away')}</div><div class="model-note">Solo modello: ${data.statisticalProbabilities.home}% · ${data.statisticalProbabilities.draw}% · ${data.statisticalProbabilities.away}%${data.ensemble ? ` · peso modello ${data.ensemble.modelWeight}%${data.ensemble.marketAvailable ? ` / mercato ${data.ensemble.marketWeight}%` : ''}` : ''}</div></section>
     <div class="goal-grid"><article><span>Gol attesi</span><strong>${data.expectedGoals.total}</strong><small>${escapeHtml(data.event.home.name)} ${data.expectedGoals.home} · ${escapeHtml(data.event.away.name)} ${data.expectedGoals.away}</small></article><article><span>Risultato modale</span><strong>${escapeHtml(data.goals.likelyScore)}</strong><small>singolo punteggio più probabile</small></article><article><span>Over 1,5</span><strong>${data.goals.over15}%</strong><small>almeno due gol</small></article><article><span>Over 2,5</span><strong>${data.goals.over25}%</strong><small>almeno tre gol</small></article><article><span>Goal</span><strong>${data.goals.btts}%</strong><small>segnano entrambe</small></article><article><span>Under 3,5</span><strong>${data.goals.under35}%</strong><small>massimo tre gol</small></article></div>
     ${signals.length ? `<section class="power-block"><header><h4>Scenari da valutare</h4><span>ordinati per robustezza</span></header><div class="signal-list">${signals.map((signal, index) => `<article><span>${String(index + 1).padStart(2, '0')}</span><div><strong>${escapeHtml(signal.label)}</strong><small>${escapeHtml(signal.reason)}</small></div><b>${signal.probability}%</b></article>`).join('')}</div></section>` : ''}
     <section class="power-block"><header><h4>Forma e produzione gol</h4><span>${data.engine.sampleSize} osservazioni complessive</span></header><div class="recent-grid">${recentTeamPanel(data.recent.home)}${recentTeamPanel(data.recent.away)}</div></section>
-    ${(data.assessment?.findings || []).length ? `<section class="evidence-box"><h4>Cosa pesa nell’analisi</h4>${data.assessment.findings.map(text => `<p>${icon('chevron')}<span>${escapeHtml(text)}</span></p>`).join('')}${data.assessment.seasonTransition ? `<div class="season-warning">${icon('info')} Nuova stagione: la classifica è ancora poco significativa, quindi il modello pesa maggiormente risultati recenti e precedenti.</div>` : ''}</section>` : ''}
+    ${(data.assessment?.findings || []).length ? `<section class="evidence-box"><h4>Cosa pesa nell’analisi</h4>${data.assessment.findings.map(text => `<p>${icon('chevron')}<span>${escapeHtml(text)}</span></p>`).join('')}${data.assessment.seasonTransition ? `<div class="season-warning">${icon('info')} Nuova stagione: la classifica è ancora poco significativa; il modello usa risultati recenti con shrinkage verso un prior prudente e mantiene il gate conservativo.</div>` : ''}</section>` : ''}
     ${data.h2h?.total ? `<section class="power-block"><header><h4>Precedenti diretti</h4><span>${data.h2h.total} incontri · ${data.h2h.homeWins}V casa · ${data.h2h.draws}P · ${data.h2h.awayWins}V ospite</span></header><div class="h2h-list">${h2hRows}</div></section>` : ''}
     ${marketOutcome ? `<section class="market-box"><div><span>CONSENSO MERCATO SENZA MARGINE</span><strong>${escapeHtml(data.market.provider)}</strong></div><div><b>1 ${marketOutcome.home}%</b><b>X ${marketOutcome.draw}%</b><b>2 ${marketOutcome.away}%</b>${data.market.totals ? `<b>Linea gol ${data.market.totals.line}</b>` : ''}</div></section>` : ''}
-    <div class="modal-note">${icon('info')}<span>${escapeHtml(data.methodology)} Non considera formazioni ufficiali o eventi dell’ultimo minuto e non garantisce alcun risultato. 18+.</span></div>
+    <div class="modal-note">${icon('info')}<span>${escapeHtml(data.methodology)} La probabilità non viene corretta in modo opaco da formazioni, news o proxy di fatica: questi elementi agiscono sul gate e restano visibili separatamente. Nessun risultato è garantito. 18+.</span></div>
   </section>`;
 }
 
@@ -1316,23 +1414,29 @@ function readinessAssessment(data) {
   const lineupScore = data.lineups?.official ? 100 : minutes <= 75 ? 20 : 55;
   const sampleScore = Math.min(100, Math.round(sample / 6 * 100));
   const freshnessScore = ageMinutes <= 20 ? 100 : ageMinutes <= 60 ? 55 : 20;
+  const model = state.analyses[`${data.event?.leagueId}:${data.event?.id}`];
+  const modelDecision = model?.decision?.state || null;
+  const modelScore = modelDecision === 'ready' ? 100 : modelDecision === 'caution' ? 58 : modelDecision === 'hold' ? 20 : 45;
   const checks = [
     { label: 'Formazioni', value: data.lineups?.official ? 'Ufficiali' : minutes <= 75 ? 'Mancano vicino al via' : 'In attesa', tone: data.lineups?.official ? 'good' : minutes <= 75 ? 'bad' : 'warn' },
     { label: 'Disponibilità', value: `${availabilityScore}/100`, tone: availabilityScore >= 65 ? 'good' : availabilityScore >= 45 ? 'warn' : 'bad' },
     { label: 'Affidabilità', value: `${reliabilityScore}/100`, tone: reliabilityScore >= 65 ? 'good' : reliabilityScore >= 45 ? 'warn' : 'bad' },
     { label: 'Campione', value: `${sample} boxscore`, tone: sample >= 4 ? 'good' : sample >= 2 ? 'warn' : 'bad' },
+    { label: 'Gate modello', value: model?.decision?.label || 'In verifica', tone: modelDecision === 'ready' ? 'good' : modelDecision === 'hold' ? 'bad' : 'warn' },
     { label: 'Freschezza', value: data.archiveMode ? ageMinutes < 2 ? 'Al salvataggio' : `${Math.round(ageMinutes)} min al salvataggio` : ageMinutes < 2 ? 'Adesso' : `${Math.round(ageMinutes)} min`, tone: ageMinutes <= 20 ? 'good' : ageMinutes <= 60 ? 'warn' : 'bad' }
   ];
   const bad = checks.filter(check => check.tone === 'bad').length;
   const warnings = checks.filter(check => check.tone === 'warn').length;
-  const tone = bad >= 2 ? 'blocked' : bad || warnings >= 2 ? 'caution' : 'ready';
+  let tone = bad >= 2 ? 'blocked' : bad || warnings >= 2 ? 'caution' : 'ready';
+  if (modelDecision === 'hold') tone = 'blocked';
+  else if (modelDecision === 'caution' && tone === 'ready') tone = 'caution';
   const readinessTitle = tone === 'ready' ? 'Pronta per una decisione informata' : tone === 'caution' ? 'Decisione possibile, ma con riserve' : 'Non pronta: troppe prove mancanti';
   return {
     mode: data.archiveMode ? 'archive' : 'pre', tone,
     title: data.archiveMode ? `Fotografia prematch: ${readinessTitle.toLowerCase()}` : readinessTitle,
     badge: data.archiveMode ? 'CONGELATA' : tone === 'ready' ? 'PRONTA' : tone === 'caution' ? 'CAUTELA' : 'ATTENDI',
     description: data.archiveMode ? 'Valutazione registrata al momento del salvataggio: non descrive la situazione live e non viene aggiornata.' : 'Il gate misura se le evidenze sono mature; non promette il risultato e non sostituisce il controllo delle fonti.',
-    maturity: Math.round((lineupScore + availabilityScore + reliabilityScore + sampleScore + freshnessScore) / 5),
+    maturity: Math.round((lineupScore + availabilityScore + reliabilityScore + sampleScore + modelScore + freshnessScore) / 6),
     checks
   };
 }
@@ -1370,6 +1474,7 @@ function lifecycleDelta(previous, current) {
   if (availabilityDelta) changes.push(`Disponibilità ${availabilityDelta > 0 ? '+' : ''}${availabilityDelta}`);
   const reliabilityDelta = current.reliability - previous.reliability;
   if (reliabilityDelta) changes.push(`Affidabilità ${reliabilityDelta > 0 ? '+' : ''}${reliabilityDelta}`);
+  if (current.decision?.state !== previous.decision?.state) changes.push(`Gate: ${current.decision?.label || 'non disponibile'}`);
   if (current.topSignal?.code !== previous.topSignal?.code) changes.push(`Segnale: ${current.topSignal?.label || 'nessuno'}`);
   else if (current.topSignal && previous.topSignal && current.topSignal.probability !== previous.topSignal.probability) {
     const delta = current.topSignal.probability - previous.topSignal.probability;
@@ -1387,7 +1492,7 @@ function signalLifecycleMarkup(data) {
   const cards = snapshots.map((snapshot, index) => {
     const delta = lifecycleDelta(snapshots[index - 1], snapshot);
     const tone = snapshot.readiness === 'ready' ? 'good' : snapshot.readiness === 'caution' ? 'warn' : 'bad';
-    return `<article class="lifecycle-card ${tone} ${index === snapshots.length - 1 ? 'latest' : ''}"><header><i></i><span>${escapeHtml(stageLabel(snapshot))}</span><small>T-${snapshot.minutesToKickoff}' · ${escapeHtml(fmtTime.format(new Date(snapshot.capturedAt)))}</small></header><div class="lifecycle-score"><strong>${snapshot.maturity}<small>/100</small></strong><span>${escapeHtml(snapshot.readinessLabel)}</span></div><div class="lifecycle-model"><span>1 ${snapshot.probabilities.home}%</span><span>X ${snapshot.probabilities.draw}%</span><span>2 ${snapshot.probabilities.away}%</span></div><ul>${delta.map(text => `<li>${escapeHtml(text)}</li>`).join('')}</ul></article>`;
+    return `<article class="lifecycle-card ${tone} ${index === snapshots.length - 1 ? 'latest' : ''}"><header><i></i><span>${escapeHtml(stageLabel(snapshot))}</span><small>T-${snapshot.minutesToKickoff}' · ${escapeHtml(fmtTime.format(new Date(snapshot.capturedAt)))}</small></header><div class="lifecycle-score"><strong>${snapshot.maturity}<small>/100</small></strong><span>${escapeHtml(snapshot.readinessLabel)}${snapshot.decision?.label ? ` · Gate ${escapeHtml(snapshot.decision.label)}` : ''}</span></div><div class="lifecycle-model"><span>1 ${snapshot.probabilities.home}%</span><span>X ${snapshot.probabilities.draw}%</span><span>2 ${snapshot.probabilities.away}%</span></div><ul>${delta.map(text => `<li>${escapeHtml(text)}</li>`).join('')}</ul></article>`;
   }).join('');
   return `<section class="signal-lifecycle"><header><div><span class="section-code">SIGNAL LIFECYCLE</span><h4>Dal primo segnale al kickoff</h4></div><small>${snapshots.length} ${snapshots.length === 1 ? 'fotografia' : 'fotografie'} · solo pre-partita</small></header><div class="lifecycle-track">${cards}</div>${lifecycle.result ? `<footer>${icon('shield')}<span>Timeline chiusa: risultato finale ${lifecycle.home} ${lifecycle.result.homeScore}–${lifecycle.result.awayScore} ${lifecycle.away}. Gli snapshot non sono stati ricalcolati.</span></footer>` : `<footer>${icon('info')}<span>Snapshot locali e immutabili: prima lettura, aggiornamenti materiali e controlli Kickoff Watch T-60/T-30/T-10.</span></footer>`}</section>`;
 }
@@ -1452,8 +1557,20 @@ function prematchTotalIntelligence(data) {
   return `<section class="prematch-total-intelligence"><header><div><span class="section-code">PRE-MATCH TOTAL INTELLIGENCE</span><h4>Il quadro completo, senza nascondere i vuoti</h4><p>Sei domande fondamentali. Tocca una riga per aprire subito tutte le prove nella sezione corretta.</p></div><div><strong>${full}/6</strong><span>complete</span></div></header><div class="prematch-coverage-bar"><span class="full" style="--share:${full / 6 * 100}%"></span><span class="partial" style="--share:${partial / 6 * 100}%"></span><span class="missing" style="--share:${missing / 6 * 100}%"></span></div><div class="prematch-manifest">${items.map((item, index) => `<button data-prematch-jump="${item.tab}" data-room-event="${escapeHtml(data.event.id)}"><span class="manifest-index">${String(index + 1).padStart(2, '0')}</span><div><small>${escapeHtml(item.title)}</small><strong>${escapeHtml(item.headline)}</strong><p>${escapeHtml(item.detail)}</p></div><em class="${item.state.tone}"><i></i>${escapeHtml(item.state.label)}</em>${icon('chevron')}</button>`).join('')}</div><footer>${icon('shield')}<span>${full} aree complete, ${partial} parziali, ${missing} non documentate. “Non disponibile” resta un’informazione, non viene coperto da una stima.</span></footer></section>`;
 }
 
+function summaryDecisionPassport(data) {
+  const key = `${data.event.leagueId}:${data.event.id}`;
+  const model = state.analyses[key];
+  if (!model) {
+    const failed = state.analysisErrors[key];
+    return `<section class="summary-decision-passport loading"><header><span>DECISION PASSPORT</span><b>${failed ? 'HOLD' : 'IN VERIFICA'}</b></header><h3>${failed ? 'Modello non raggiungibile' : 'Sto verificando la maturità della lettura'}</h3><p>${escapeHtml(failed || 'Campione, benchmark e probabilità vengono caricati in parallelo al dossier editoriale.')}</p></section>`;
+  }
+  const decision = model.decision || { state: 'caution', label: 'CAUTION', title: 'Lettura da verificare', reason: 'Gate non disponibile nello snapshot storico.', unknowns: [] };
+  const signal = model.signals?.[0];
+  return `<section class="summary-decision-passport ${escapeHtml(decision.state)}"><header><span>DECISION PASSPORT</span><b>${escapeHtml(decision.label)}</b></header><div class="summary-decision-main"><div><h3>${escapeHtml(decision.title)}</h3><p>${escapeHtml(decision.reason)}</p></div><strong>${decision.state === 'hold' || !signal ? '—' : `${signal.probability}%`}<small>${decision.state === 'hold' || !signal ? 'astensione' : escapeHtml(signal.label)}</small></strong></div><div class="summary-decision-meta"><span><b>${model.engine?.quality ?? '–'}/100</b> qualità modello</span><span><b>${model.engine?.sampleSize ?? '–'}</b> gare recenti</span><span><b>${model.ensemble?.marketAvailable ? 'Sì' : 'No'}</b> benchmark mercato</span><span><b>${decision.unknowns?.length || 0}</b> vuoti aperti</span></div>${decision.unknowns?.length ? `<p class="summary-unknowns">${escapeHtml(decision.unknowns.slice(0, 3).join(' · '))}</p>` : ''}<button data-prematch-jump="numbers" data-room-event="${escapeHtml(data.event.id)}">Apri probabilità e Model Passport ${icon('chevron')}</button></section>`;
+}
+
 function matchRoomSummary(data) {
-  return `<div class="match-room-pane summary-pane">${readinessGate(data)}${executiveBriefMarkup(data)}${prematchTotalIntelligence(data)}${signalLifecycleMarkup(data)}${summaryWatchMarkup(data)}</div>`;
+  return `<div class="match-room-pane summary-pane">${summaryDecisionPassport(data)}${readinessGate(data)}${executiveBriefMarkup(data)}${prematchTotalIntelligence(data)}${signalLifecycleMarkup(data)}${summaryWatchMarkup(data)}</div>`;
 }
 
 function matchRoomTeams(data) {
@@ -1467,7 +1584,7 @@ function matchRoomNumbers(data) {
   const modelError = state.analysisErrors[key];
   const modelContent = model ? renderPowerAnalysis(model) : modelError ? `<section class="power-error">${icon('info')}<div><strong>Analisi avanzata non disponibile</strong><p>${escapeHtml(modelError)}. Restano validi calendario, forma e dati prematch già verificati.</p></div></section>` : data.archiveMode ? `<section class="power-error neutral">${icon('info')}<div><strong>Modello non osservato prima del kickoff</strong><p>Il Vault non ricostruisce probabilità a partita iniziata.</p></div></section>` : analysisLoading();
   const tournamentMarkup = (data.tournamentStats || []).length ? `<div class="tournament-intel"><span class="section-overline">NUMERI NEL TORNEO</span><div>${data.tournamentStats.map(team => `<article>${teamLogo(team, 'intel-team-logo')}<strong>${escapeHtml(team.name)}</strong><span><b>${team.goals ?? '–'}</b>gol</span><span><b>${team.conceded ?? '–'}</b>subiti</span><span><b>${team.goalDifference == null ? '–' : team.goalDifference > 0 ? `+${team.goalDifference}` : team.goalDifference}</b>diff.</span></article>`).join('')}</div></div>` : '';
-  return `<div class="match-room-pane numbers-pane"><section class="room-group model-room-group"><header><span class="section-code">POWER MODEL 2.1</span><h3>Modello, probabilità e campione</h3><p>Il modello vive qui soltanto: è valutabile prima del kickoff e dopo il finale resta solo come fotografia storica non ricalcolata.</p></header><div id="roomPowerMount">${modelContent}</div></section><section class="room-group"><header><span class="section-code">TOURNAMENT DATA</span><h3>Numeri e giocatori della competizione</h3></header>${tournamentMarkup}<div class="leaders-intel-grid">${(data.leaders || []).map(leaderIntelCard).join('') || '<div class="intel-empty">Leader del torneo non disponibili nel feed.</div>'}</div></section></div>`;
+  return `<div class="match-room-pane numbers-pane"><section class="room-group model-room-group"><header><span class="section-code">POWER MODEL 3.0</span><h3>Modello, probabilità e campione</h3><p>Il modello vive qui soltanto: è valutabile prima del kickoff e dopo il finale resta solo come fotografia storica non ricalcolata.</p></header><div id="roomPowerMount">${modelContent}</div></section><section class="room-group"><header><span class="section-code">TOURNAMENT DATA</span><h3>Numeri e giocatori della competizione</h3></header>${tournamentMarkup}<div class="leaders-intel-grid">${(data.leaders || []).map(leaderIntelCard).join('') || '<div class="intel-empty">Leader del torneo non disponibili nel feed.</div>'}</div></section></div>`;
 }
 
 function matchRoomVerify(data) {
@@ -1511,7 +1628,7 @@ function openInfo() {
   const modal = $('#matchModal');
   delete modal.dataset.eventId;
   modal.style.removeProperty('--league-color');
-  modal.innerHTML = `<button class="modal-close" data-close-modal aria-label="Chiudi">${icon('x')}</button><header class="modal-hero"><span class="modal-competition"><i></i>TRASPARENZA</span><div style="position:relative;z-index:1;margin-top:24px"><h2 style="margin:0 0 8px;font-size:26px">Dati gratuiti, metodo chiaro.</h2><p style="margin:0;color:rgba(255,255,255,.65);font-size:11px;line-height:1.5">Nessun abbonamento e nessuna chiave API a pagamento.</p></div></header><div class="modal-body"><section class="analysis-box"><div class="analysis-box-head"><span>Fonti attive</span><strong>Feed pubblici</strong></div><p>Partite, contesto, statistiche, calendari, classifiche, lineup e injury route: feed pubblici ESPN. Fantasy Premier League ufficiale aggiunge status e aggiornamenti per la sola Premier League. Google News fornisce titoli datati e link; ANSA, Football Italia ed ESPN alimentano la Newsroom.</p></section><section class="form-comparison"><h3>Come si aggiorna</h3><p style="color:var(--muted);font-size:10px;line-height:1.6">Le partite vengono ricontrollate ogni 90 secondi mentre il sito è aperto; le notizie ogni pochi minuti. A mezzanotte il calendario avanza automaticamente sul nuovo giorno nel fuso Europe/Rome. In caso di errore temporaneo, viene mantenuta l’ultima risposta valida in cache.</p><h3 style="margin-top:18px">Power Model 2.1 + Match Intelligence</h3><p style="color:var(--muted);font-size:10px;line-height:1.6">Il Power Model combina distribuzione di Poisson, forma, precedenti, fattore campo e consenso di mercato senza margine quando presente. Match Intelligence aggiunge fase e aggregato, riposo, carico gare, campioni tecnici recenti, giocatori chiave, formazioni ufficiali e news pertinenti. Ogni elemento è marcato come fatto, lettura derivata o dato da verificare. Nessun esito è garantito.</p><h3 style="margin-top:18px">Global Calendar V4.8.1</h3><p style="color:var(--muted);font-size:10px;line-height:1.6">La scoperta gratuita legge il calendario competitivo globale di ieri, oggi e domani, oltre alle competizioni principali nel periodo esteso. I tornei non ancora catalogati mantengono l’etichetta del provider; le amichevoli entrano soltanto se coinvolgono una grande squadra, così il volume non diventa rumore.</p><h3 style="margin-top:18px">XI Intelligence + Pre-Match Vault V4.8</h3><p style="color:var(--muted);font-size:10px;line-height:1.6">Le probabili derivano da XI recenti pesati, ruoli e disponibilità; le ufficiali soltanto dagli starter pubblicati per l’evento. Affidabilità XI, Forza disponibile e Continuità sono misure distinte, mai probabilità di vittoria. Durante il live score e stato sono correnti, mentre il dossier già osservato prima del kickoff resta locale, congelato, timestampato e in sola lettura: nessuna ricalcolazione post-hoc.</p><h3 style="margin-top:18px">Pre-Match Total Intelligence V4.7</h3><p style="color:var(--muted);font-size:10px;line-height:1.6">Il manifesto in Sintesi dichiara complete, parziali o non disponibili sei aree indispensabili e porta direttamente alle prove. Il dossier prematch congelato non produce segnali o consigli live.</p><h3 style="margin-top:18px">Signal Lifecycle V4.6</h3><p style="color:var(--muted);font-size:10px;line-height:1.6">Dentro la Sintesi, Signal Lifecycle conserva soltanto fotografie realmente pre-kickoff: prima lettura, aggiornamenti materiali e controlli T-60, T-30 e T-10 del Kickoff Watch. Mostra variazioni di readiness, probabilità, lineup, disponibilità e affidabilità; dopo il finale aggiunge il risultato senza ricalcolare il passato.</p></section><div class="modal-note">${icon('shield')}<span>Preferiti, tema e alert sono salvati localmente nel browser. Il sito non richiede account e non invia dati personali.</span></div><div class="modal-actions"><button class="button primary" data-close-modal>Ho capito</button></div></div>`;
+  modal.innerHTML = `<button class="modal-close" data-close-modal aria-label="Chiudi">${icon('x')}</button><header class="modal-hero"><span class="modal-competition"><i></i>TRASPARENZA</span><div style="position:relative;z-index:1;margin-top:24px"><h2 style="margin:0 0 8px;font-size:26px">Dati gratuiti, metodo chiaro.</h2><p style="margin:0;color:rgba(255,255,255,.65);font-size:11px;line-height:1.5">Nessun abbonamento e nessuna chiave API a pagamento.</p></div></header><div class="modal-body"><section class="analysis-box"><div class="analysis-box-head"><span>Fonti attive</span><strong>Feed pubblici</strong></div><p>Partite, contesto, statistiche, calendari, classifiche, lineup e injury route: feed pubblici ESPN. Fantasy Premier League ufficiale aggiunge status e aggiornamenti per la sola Premier League. Google News fornisce titoli datati e link; ANSA, Football Italia ed ESPN alimentano la Newsroom.</p></section><section class="form-comparison"><h3>Come si aggiorna</h3><p style="color:var(--muted);font-size:10px;line-height:1.6">Le partite vengono ricontrollate ogni 90 secondi mentre il sito è aperto; le notizie ogni pochi minuti. A mezzanotte il calendario avanza automaticamente sul nuovo giorno nel fuso Europe/Rome. In caso di errore temporaneo, retry limitato, circuit breaker e cache last-known-good con età massima impediscono propagazioni silenziose.</p><h3 style="margin-top:18px">Power Model 3.0 + Match Intelligence</h3><p style="color:var(--muted);font-size:10px;line-height:1.6">Il Power Model usa Poisson con recency weighting, shrinkage prudente, fattore casa/trasferta e correzione limitata dei punteggi bassi; il mercato senza margine resta separato e riceve un peso dinamico dichiarato. Match Intelligence aggiunge fase e aggregato, riposo, carico gare, campioni tecnici recenti, giocatori chiave, formazioni ufficiali e news pertinenti. Ogni elemento è marcato come fatto, lettura derivata o dato da verificare. Nessun esito è garantito.</p><h3 style="margin-top:18px">Trust & Global Calendar V4.9</h3><p style="color:var(--muted);font-size:10px;line-height:1.6">La scoperta gratuita legge il calendario competitivo globale di ieri, oggi e domani, oltre alle competizioni principali nel periodo esteso. I tornei non ancora catalogati mantengono l’etichetta del provider; le amichevoli entrano soltanto se coinvolgono una grande squadra, così il volume non diventa rumore.</p><h3 style="margin-top:18px">XI Intelligence + Pre-Match Vault V4.8</h3><p style="color:var(--muted);font-size:10px;line-height:1.6">Le probabili derivano da XI recenti pesati, ruoli e disponibilità; le ufficiali soltanto dagli starter pubblicati per l’evento. Affidabilità XI, Forza disponibile e Continuità sono misure distinte, mai probabilità di vittoria. Durante il live score e stato sono correnti, mentre il dossier già osservato prima del kickoff resta locale, congelato, timestampato e in sola lettura: nessuna ricalcolazione post-hoc.</p><h3 style="margin-top:18px">Pre-Match Total Intelligence V4.7</h3><p style="color:var(--muted);font-size:10px;line-height:1.6">Il manifesto in Sintesi dichiara complete, parziali o non disponibili sei aree indispensabili e porta direttamente alle prove. Il dossier prematch congelato non produce segnali o consigli live.</p><h3 style="margin-top:18px">Signal Lifecycle V4.6</h3><p style="color:var(--muted);font-size:10px;line-height:1.6">Dentro la Sintesi, Signal Lifecycle conserva soltanto fotografie realmente pre-kickoff: prima lettura, aggiornamenti materiali e controlli T-60, T-30 e T-10 del Kickoff Watch. Mostra variazioni di readiness, probabilità, lineup, disponibilità e affidabilità; dopo il finale aggiunge il risultato senza ricalcolare il passato.</p></section><div class="modal-note">${icon('shield')}<span>Preferiti, tema e alert sono salvati localmente nel browser. Il sito non richiede account e non invia dati personali.</span></div><div class="modal-actions"><button class="button primary" data-close-modal>Ho capito</button></div></div>`;
   $('#modalLayer').hidden = false;
   document.body.style.overflow = 'hidden';
 }

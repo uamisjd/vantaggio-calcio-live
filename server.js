@@ -119,6 +119,10 @@ const ANALYSIS_LEAGUES = new Set([
 
 const memoryCache = new Map();
 const sourceTelemetry = new Map();
+const sourceCircuits = new Map();
+const CIRCUIT_FAILURE_THRESHOLD = 4;
+const CIRCUIT_BASE_COOLDOWN_MS = 60_000;
+const CIRCUIT_MAX_COOLDOWN_MS = 5 * 60_000;
 const SOURCE_CATALOG = {
   'site.api.espn.com': 'ESPN Sports Feed',
   'site.web.api.espn.com': 'ESPN Web Feed',
@@ -138,15 +142,35 @@ const SOURCE_COVERAGE = {
   'www.espn.com': 'News editoriali internazionali'
 };
 
-function recordSource(url, ok, latencyMs, error = '') {
-  let host = 'fonte-sconosciuta';
-  try { host = new URL(url).hostname; } catch {}
+function sourceHost(url) {
+  try { return new URL(url).hostname; } catch { return 'fonte-sconosciuta'; }
+}
+
+function recordSource(url, ok, latencyMs, error = '', circuitEligible = true) {
+  const host = sourceHost(url);
   const current = sourceTelemetry.get(host) || { host, label: SOURCE_CATALOG[host] || host, calls: 0, successes: 0, failures: 0, totalLatency: 0 };
   current.calls += 1;
   current.totalLatency += latencyMs;
   current.lastLatencyMs = latencyMs;
-  if (ok) { current.successes += 1; current.consecutiveFailures = 0; current.lastSuccessAt = nowIso(); current.lastError = ''; }
-  else { current.failures += 1; current.consecutiveFailures = (current.consecutiveFailures || 0) + 1; current.lastErrorAt = nowIso(); current.lastError = String(error || 'Errore fonte').slice(0, 160); }
+  if (ok) {
+    current.successes += 1;
+    current.consecutiveFailures = 0;
+    current.lastSuccessAt = nowIso();
+    current.lastError = '';
+    sourceCircuits.delete(host);
+  } else {
+    current.failures += 1;
+    current.lastErrorAt = nowIso();
+    current.lastError = String(error || 'Errore fonte').slice(0, 160);
+    if (circuitEligible) {
+      current.consecutiveFailures = (current.consecutiveFailures || 0) + 1;
+      if (current.consecutiveFailures >= CIRCUIT_FAILURE_THRESHOLD) {
+        const exponent = current.consecutiveFailures - CIRCUIT_FAILURE_THRESHOLD;
+        const cooldownMs = Math.min(CIRCUIT_MAX_COOLDOWN_MS, CIRCUIT_BASE_COOLDOWN_MS * (2 ** exponent));
+        sourceCircuits.set(host, { openedAt: nowIso(), openUntil: Date.now() + cooldownMs, cooldownMs });
+      }
+    }
+  }
   sourceTelemetry.set(host, current);
 }
 
@@ -154,10 +178,26 @@ function sourceHealthSnapshot() {
   const hosts = new Set([...Object.keys(SOURCE_CATALOG), ...sourceTelemetry.keys()]);
   const sources = [...hosts].map(host => {
     const item = sourceTelemetry.get(host) || { host, label: SOURCE_CATALOG[host] || host, calls: 0, successes: 0, failures: 0, totalLatency: 0 };
-    const state = !item.calls ? 'non_testata' : !item.successes || (item.consecutiveFailures || 0) >= 3 ? 'degradata' : item.failures ? 'operativa_con_errori' : 'operativa';
-    return { ...item, coverage: SOURCE_COVERAGE[host] || 'Fonte esterna osservata', state, averageLatencyMs: item.calls ? Math.round(item.totalLatency / item.calls) : null };
+    const circuit = sourceCircuits.get(host);
+    const circuitOpen = Boolean(circuit && circuit.openUntil > Date.now());
+    const state = circuitOpen ? 'circuito_aperto' : !item.calls ? 'non_testata' : !item.successes || (item.consecutiveFailures || 0) >= 3 ? 'degradata' : item.failures ? 'operativa_con_errori' : 'operativa';
+    return {
+      ...item,
+      coverage: SOURCE_COVERAGE[host] || 'Fonte esterna osservata',
+      state,
+      averageLatencyMs: item.calls ? Math.round(item.totalLatency / item.calls) : null,
+      circuit: circuitOpen ? { openedAt: circuit.openedAt, retryAt: new Date(circuit.openUntil).toISOString(), cooldownMs: circuit.cooldownMs } : null
+    };
   }).sort((a, b) => (b.lastSuccessAt || '').localeCompare(a.lastSuccessAt || '') || a.label.localeCompare(b.label));
-  return { ok: true, service: 'VANTAGGIO', generatedAt: nowIso(), sources, cache: { entries: memoryCache.size, staleEntries: [...memoryCache.values()].filter(item => item.stale).length }, rule: 'Lo stato misura le risposte osservate dal server gratuito; non certifica completezza editoriale o medica.' };
+  return {
+    ok: true,
+    service: 'VANTAGGIO',
+    generatedAt: nowIso(),
+    sources,
+    cache: { entries: memoryCache.size, staleEntries: [...memoryCache.values()].filter(item => item.stale).length },
+    resilience: { retryAttempts: 1, circuitFailureThreshold: CIRCUIT_FAILURE_THRESHOLD, maxCircuitCooldownMs: CIRCUIT_MAX_COOLDOWN_MS, staleFallback: 'bounded' },
+    rule: 'Lo stato misura le risposte osservate dal server gratuito e non certifica la completezza editoriale o medica; circuit breaker e fallback stale limitato impediscono che errori ripetuti o dati troppo vecchi si propaghino in silenzio.'
+  };
 }
 
 function nowIso() {
@@ -183,45 +223,89 @@ function addDays(isoDate, count) {
   return date.toISOString().slice(0, 10);
 }
 
+function wait(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
 async function fetchText(url, timeoutMs = 9000) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
-  const started = Date.now();
-  try {
-    const response = await fetch(url, {
-      signal: controller.signal,
-      headers: {
-        'user-agent': 'curl/8.0',
-        'accept': 'application/json,text/xml,application/rss+xml,text/plain,*/*',
-        'referer': 'https://www.espn.com/'
-      }
-    });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const text = await response.text();
-    recordSource(url, true, Date.now() - started);
-    return text;
-  } catch (error) {
-    recordSource(url, false, Date.now() - started, error.message);
-    throw error;
-  } finally {
-    clearTimeout(timeout);
+  const host = sourceHost(url);
+  const circuit = sourceCircuits.get(host);
+  if (circuit && circuit.openUntil > Date.now()) {
+    const telemetry = sourceTelemetry.get(host) || { host, label: SOURCE_CATALOG[host] || host, calls: 0, successes: 0, failures: 0, totalLatency: 0 };
+    telemetry.shortCircuits = (telemetry.shortCircuits || 0) + 1;
+    sourceTelemetry.set(host, telemetry);
+    throw new Error(`Circuito fonte aperto fino alle ${new Date(circuit.openUntil).toISOString()}`);
   }
+
+  let lastError;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    const started = Date.now();
+    try {
+      const response = await fetch(url, {
+        signal: controller.signal,
+        headers: {
+          'user-agent': 'curl/8.0',
+          'accept': 'application/json,text/xml,application/rss+xml,text/plain,*/*',
+          'referer': 'https://www.espn.com/'
+        }
+      });
+      if (!response.ok) {
+        const error = new Error(`HTTP ${response.status}`);
+        error.status = response.status;
+        throw error;
+      }
+      const text = await response.text();
+      recordSource(url, true, Date.now() - started);
+      return text;
+    } catch (error) {
+      lastError = error;
+      const retryable = error.name === 'AbortError' || !error.status || error.status === 429 || error.status >= 500;
+      recordSource(url, false, Date.now() - started, error.message, retryable);
+      if (!retryable || attempt === 1) throw error;
+      await wait(180 + Math.round(Math.random() * 120));
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+  throw lastError || new Error('Fonte non raggiungibile');
 }
 
 async function fetchJson(url, timeoutMs = 9000) {
   return JSON.parse(await fetchText(url, timeoutMs));
 }
 
-async function cached(key, ttlMs, producer, force = false) {
+function cacheMetadata(result, extra = {}) {
+  return {
+    fetchedAt: result.fetchedAt,
+    stale: Boolean(result.stale),
+    staleAgeMs: result.staleAgeMs || 0,
+    staleLimitMs: result.staleLimitMs || result.maxStaleMs || 0,
+    cache: result.cache,
+    ...extra
+  };
+}
+
+async function cached(key, ttlMs, producer, force = false, maxStaleMs = Math.max(15 * 60_000, Math.min(6 * 3600_000, ttlMs * 20))) {
   const hit = memoryCache.get(key);
   if (!force && hit && hit.expires > Date.now()) return { ...hit, cache: 'hit' };
   try {
     const value = await producer();
-    const item = { value, fetchedAt: nowIso(), expires: Date.now() + ttlMs, stale: false };
+    const item = { value, fetchedAt: nowIso(), expires: Date.now() + ttlMs, stale: false, maxStaleMs };
     memoryCache.set(key, item);
     return { ...item, cache: 'miss' };
   } catch (error) {
-    if (hit) return { ...hit, stale: true, error: error.message, cache: 'stale' };
+    if (hit) {
+      const staleAgeMs = Math.max(0, Date.now() - new Date(hit.fetchedAt).getTime());
+      const staleLimitMs = Number(hit.maxStaleMs || maxStaleMs);
+      if (staleAgeMs <= staleLimitMs) {
+        hit.stale = true;
+        hit.staleAgeMs = staleAgeMs;
+        hit.lastFallbackAt = nowIso();
+        return { ...hit, stale: true, staleAgeMs, staleLimitMs, error: error.message, cache: 'stale' };
+      }
+    }
     throw error;
   }
 }
@@ -613,15 +697,56 @@ function poisson(k, lambda) {
   return Math.exp(-lambda) * Math.pow(lambda, k) / factorial;
 }
 
+function weightedRecentProfile(recent, preferredVenue) {
+  const priorGoals = 1.3;
+  const priorWeight = 3;
+  const events = (recent.events || []).slice().sort((a, b) => new Date(b.date) - new Date(a.date));
+  let weightedFor = 0;
+  let weightedAgainst = 0;
+  let observedWeight = 0;
+  let venueMatches = 0;
+  let newestAgeDays = null;
+  events.forEach((event, index) => {
+    const eventTime = new Date(event.date).getTime();
+    const ageDays = Number.isFinite(eventTime) ? Math.max(0, (Date.now() - eventTime) / 86_400_000) : index * 14;
+    if (newestAgeDays == null || ageDays < newestAgeDays) newestAgeDays = ageDays;
+    const temporalWeight = Math.max(0.12, 0.5 ** (ageDays / 120));
+    const venueWeight = event.venue === preferredVenue ? 1.12 : 1;
+    const weight = temporalWeight * venueWeight;
+    weightedFor += Number(event.goalsFor || 0) * weight;
+    weightedAgainst += Number(event.goalsAgainst || 0) * weight;
+    observedWeight += weight;
+    if (event.venue === preferredVenue) venueMatches += 1;
+  });
+  return {
+    goalsFor: (weightedFor + priorGoals * priorWeight) / (observedWeight + priorWeight),
+    goalsAgainst: (weightedAgainst + priorGoals * priorWeight) / (observedWeight + priorWeight),
+    observedWeight,
+    venueMatches,
+    newestAgeDays: newestAgeDays == null ? null : Math.round(newestAgeDays),
+    priorGoals,
+    priorWeight
+  };
+}
+
+function lowScoreTau(home, away, expectedHome, expectedAway, rho) {
+  if (!rho) return 1;
+  if (home === 0 && away === 0) return 1 - expectedHome * expectedAway * rho;
+  if (home === 0 && away === 1) return 1 + expectedHome * rho;
+  if (home === 1 && away === 0) return 1 + expectedAway * rho;
+  if (home === 1 && away === 1) return 1 - rho;
+  return 1;
+}
+
 function statisticalModel(homeRecent, awayRecent) {
-  const hasHome = homeRecent.played >= 2;
-  const hasAway = awayRecent.played >= 2;
-  const homeFor = hasHome ? homeRecent.goalsFor / homeRecent.played : 1.35;
-  const homeAgainst = hasHome ? homeRecent.goalsAgainst / homeRecent.played : 1.2;
-  const awayFor = hasAway ? awayRecent.goalsFor / awayRecent.played : 1.15;
-  const awayAgainst = hasAway ? awayRecent.goalsAgainst / awayRecent.played : 1.35;
-  const expectedHome = clamp(((homeFor + awayAgainst) / 2) * 1.08, 0.35, 3.4);
-  const expectedAway = clamp(((awayFor + homeAgainst) / 2) * 0.94, 0.3, 3.2);
+  const homeProfile = weightedRecentProfile(homeRecent, 'Casa');
+  const awayProfile = weightedRecentProfile(awayRecent, 'Trasferta');
+  const recentSamples = homeRecent.played + awayRecent.played;
+  const effectiveSample = homeProfile.observedWeight + awayProfile.observedWeight;
+  const evidence = clamp(effectiveSample / 8, 0, 1);
+  const expectedHome = clamp(((homeProfile.goalsFor + awayProfile.goalsAgainst) / 2) * 1.1, 0.45, 2.9);
+  const expectedAway = clamp(((awayProfile.goalsFor + homeProfile.goalsAgainst) / 2) * 0.92, 0.4, 2.7);
+  const rho = homeRecent.played >= 4 && awayRecent.played >= 4 ? -0.05 * evidence : 0;
   let homeWin = 0;
   let draw = 0;
   let awayWin = 0;
@@ -633,7 +758,8 @@ function statisticalModel(homeRecent, awayRecent) {
   let likely = { home: 0, away: 0, probability: 0 };
   for (let home = 0; home <= 8; home += 1) {
     for (let away = 0; away <= 8; away += 1) {
-      const probability = poisson(home, expectedHome) * poisson(away, expectedAway);
+      const independent = poisson(home, expectedHome) * poisson(away, expectedAway);
+      const probability = Math.max(0, independent * lowScoreTau(home, away, expectedHome, expectedAway, rho));
       totalMass += probability;
       if (home > away) homeWin += probability;
       else if (home === away) draw += probability;
@@ -646,11 +772,31 @@ function statisticalModel(homeRecent, awayRecent) {
     }
   }
   const normalize = value => value / totalMass;
+  const rawOutcome = { home: normalize(homeWin), draw: normalize(draw), away: normalize(awayWin) };
+  const priorOutcome = { home: 0.43, draw: 0.28, away: 0.29 };
+  const credibility = 0.62 + evidence * 0.3;
+  const outcome = {
+    home: rawOutcome.home * credibility + priorOutcome.home * (1 - credibility),
+    draw: rawOutcome.draw * credibility + priorOutcome.draw * (1 - credibility),
+    away: rawOutcome.away * credibility + priorOutcome.away * (1 - credibility)
+  };
   return {
     expectedGoals: { home: round1(expectedHome), away: round1(expectedAway), total: round1(expectedHome + expectedAway) },
-    outcome: { home: normalize(homeWin), draw: normalize(draw), away: normalize(awayWin) },
+    outcome,
     goals: { btts: normalize(btts), over15: normalize(over15), over25: normalize(over25), under35: normalize(under35) },
-    likelyScore: `${likely.home}-${likely.away}`
+    likelyScore: `${likely.home}-${likely.away}`,
+    diagnostics: {
+      recentSamples,
+      effectiveSample: round1(effectiveSample),
+      evidence: Math.round(evidence * 100),
+      credibility: Math.round(credibility * 100),
+      recencyHalfLifeDays: 120,
+      priorGoals: homeProfile.priorGoals,
+      priorWeight: homeProfile.priorWeight,
+      lowScoreCorrection: rho ? { method: 'Dixon-Coles conservativa', rho: Math.round(rho * 1000) / 1000 } : { method: 'non attiva', rho: 0 },
+      venueSamples: { home: homeProfile.venueMatches, away: awayProfile.venueMatches },
+      newestAgeDays: { home: homeProfile.newestAgeDays, away: awayProfile.newestAgeDays }
+    }
   };
 }
 
@@ -938,18 +1084,36 @@ async function getAnalysis(eventId, leagueId, force = false) {
     const keyEvents = normalizeKeyEvents(summary);
     const matchState = competition.status?.type?.state || 'pre';
     const model = statisticalModel(homeRecent, awayRecent);
+    const marketWeight = market?.outcome ? clamp(0.62 + (1 - model.diagnostics.credibility / 100) * 0.12, 0.62, 0.68) : 0;
+    const modelWeight = 1 - marketWeight;
     const consensus = market?.outcome ? {
-      home: model.outcome.home * 0.58 + market.outcome.home * 0.42,
-      draw: model.outcome.draw * 0.58 + market.outcome.draw * 0.42,
-      away: model.outcome.away * 0.58 + market.outcome.away * 0.42
+      home: model.outcome.home * modelWeight + market.outcome.home * marketWeight,
+      draw: model.outcome.draw * modelWeight + market.outcome.draw * marketWeight,
+      away: model.outcome.away * modelWeight + market.outcome.away * marketWeight
     } : model.outcome;
     const probabilities = percentageTriplet(consensus);
     const probabilityDecimals = { home: probabilities.home / 100, draw: probabilities.draw / 100, away: probabilities.away / 100 };
     const recentSamples = homeRecent.played + awayRecent.played;
-    const quality = clamp(Math.round(Math.min(50, recentSamples * 5) + Math.min(20, h2h.total * 4) + (market?.available ? 20 : 0) + (standings.home && standings.away ? 10 : 0)), 18, 95);
+    const recentScore = Math.min(50, recentSamples * 5);
+    const freshnessScore = [model.diagnostics.newestAgeDays.home, model.diagnostics.newestAgeDays.away].every(days => Number.isFinite(days) && days <= 45) ? 10 : 4;
+    const quality = clamp(Math.round(recentScore + freshnessScore + (market?.outcome ? 20 : 0) + (standings.home && standings.away ? 10 : 0) + (lineups.official ? 10 : 0)), 18, 96);
     const signals = buildSignals(probabilityDecimals, model.goals, homeTeam.name, awayTeam.name);
     const strongest = signals[0] || { probability: Math.max(probabilities.home, probabilities.draw, probabilities.away), label: 'Esito ancora aperto' };
-    const risk = quality < 45 || strongest.probability < 64 ? 'Alto' : strongest.probability >= 78 && quality >= 70 ? 'Contenuto' : 'Medio';
+    const unknowns = [];
+    if (recentSamples < 8) unknowns.push(`campione recente ridotto (${recentSamples}/10)`);
+    if (!market?.outcome) unknowns.push('benchmark di mercato 1-X-2 assente');
+    if (!lineups.official) unknowns.push('formazioni ufficiali non pubblicate');
+    if (!(standings.home && standings.away)) unknowns.push('confronto classifica incompleto');
+    const decisionState = quality < 45 || recentSamples < 4 ? 'hold' : quality >= 72 && strongest.probability >= 68 && Boolean(market?.outcome) ? 'ready' : 'caution';
+    const decision = {
+      state: decisionState,
+      label: decisionState === 'ready' ? 'READY' : decisionState === 'caution' ? 'CAUTION' : 'HOLD',
+      title: decisionState === 'ready' ? 'Lettura matura, resta da verificare il kickoff' : decisionState === 'caution' ? 'Lettura utilizzabile con riserve' : 'Nessun segnale abbastanza maturo',
+      reason: decisionState === 'ready' ? 'Campione, benchmark e qualità superano la soglia prudenziale.' : decisionState === 'caution' ? 'Esistono segnali utili, ma i vuoti informativi impediscono una lettura forte.' : 'Il sistema si astiene perché il campione o la qualità dei dati sono insufficienti.',
+      unknowns,
+      thresholds: { readyQuality: 72, readySignal: 68, minimumRecentSamples: 4 }
+    };
+    const risk = decisionState === 'hold' ? 'Alto' : decisionState === 'ready' && strongest.probability >= 78 ? 'Contenuto' : 'Medio';
     const findings = [];
     if (homeRecent.played) findings.push(`${homeTeam.name}: ${homeRecent.avgGoalsFor} gol fatti e ${homeRecent.avgGoalsAgainst} subiti di media nelle ultime ${homeRecent.played}.`);
     if (awayRecent.played) findings.push(`${awayTeam.name}: ${awayRecent.avgGoalsFor} gol fatti e ${awayRecent.avgGoalsAgainst} subiti di media nelle ultime ${awayRecent.played}.`);
@@ -964,7 +1128,18 @@ async function getAnalysis(eventId, leagueId, force = false) {
       keyEvents,
       leaders,
       lineups,
-      engine: { version: '2.1', name: 'VANTAGGIO Power Model', generatedAt: nowIso(), quality, sampleSize: recentSamples + h2h.total },
+      engine: {
+        version: '3.0', name: 'VANTAGGIO Power Model', generatedAt: nowIso(), quality,
+        sampleSize: recentSamples, effectiveSample: model.diagnostics.effectiveSample,
+        diagnostics: model.diagnostics
+      },
+      decision,
+      ensemble: {
+        modelWeight: Math.round(modelWeight * 100),
+        marketWeight: Math.round(marketWeight * 100),
+        marketAvailable: Boolean(market?.outcome),
+        rule: market?.outcome ? 'Benchmark senza margine con peso dinamico dichiarato.' : 'Solo modello, con gate prudenziale rafforzato.'
+      },
       probabilities,
       statisticalProbabilities: percentageTriplet(model.outcome),
       expectedGoals: model.expectedGoals,
@@ -982,7 +1157,7 @@ async function getAnalysis(eventId, leagueId, force = false) {
       h2h,
       standings,
       market,
-      methodology: 'Modello Poisson sui gol recenti, forma, precedenti e consenso di mercato quando disponibile. Le fonti possono avere ritardi o campioni incompleti.'
+      methodology: 'Poisson con decadimento temporale a 120 giorni, peso moderato casa/trasferta, shrinkage verso un prior prudente e correzione Dixon-Coles limitata ai punteggi bassi quando il campione lo consente. H2H mostrato come contesto ma escluso dal quality score. Il mercato senza margine, quando presente, resta separato e riceve un peso dinamico esplicito.'
     };
   }, force);
 }
@@ -1664,7 +1839,7 @@ function buildLineupIntelligence(analysis, homeSnapshots, awaySnapshots, availab
     const knownCore = candidates.filter(candidate => candidate.importance >= 20).sort((a, b) => b.importance - a.importance).slice(0, 11);
     const idealStrength = knownCore.reduce((sum, player) => sum + player.importance, 0);
     const selectedStrength = selectedDetailed.reduce((sum, player) => sum + (candidateFor(player.name)?.importance || 0), 0);
-    const strength = knownCore.length >= 8 && idealStrength > 0 ? clamp(Math.round(selectedStrength / idealStrength * 100), 35, 100) : null;
+    const strength = mode !== 'non_disponibile' && knownCore.length >= 8 && idealStrength > 0 ? clamp(Math.round(selectedStrength / idealStrength * 100), 35, 100) : null;
 
     const bench = officialTeam?.substitutes || [];
     const impactReports = (teamAvailability.structured || []).map(item => {
@@ -1996,7 +2171,7 @@ const server = http.createServer(async (req, res) => {
         return jsonResponse(res, 200, {
           ok: true,
           data: result.value,
-          meta: { fetchedAt: result.fetchedAt, stale: result.stale, cache: result.cache, from, to }
+          meta: cacheMetadata(result, { from, to })
         });
       }
       if (pathname === '/api/standings') {
@@ -2004,26 +2179,26 @@ const server = http.createServer(async (req, res) => {
         if (!STANDINGS_LEAGUES[leagueId]) return jsonResponse(res, 400, { ok: false, error: 'Competizione non valida' });
         const force = requestUrl.searchParams.get('fresh') === '1';
         const result = await getStandings(leagueId, force);
-        return jsonResponse(res, 200, { ok: true, data: result.value, meta: { fetchedAt: result.fetchedAt, stale: result.stale } });
+        return jsonResponse(res, 200, { ok: true, data: result.value, meta: cacheMetadata(result) });
       }
       if (pathname === '/api/news') {
         const force = requestUrl.searchParams.get('fresh') === '1';
         const result = await getNews(force);
-        return jsonResponse(res, 200, { ok: true, data: result.value, meta: { fetchedAt: result.fetchedAt, stale: result.stale } });
+        return jsonResponse(res, 200, { ok: true, data: result.value, meta: cacheMetadata(result) });
       }
       if (pathname === '/api/analysis') {
         const eventId = requestUrl.searchParams.get('event') || '';
         const leagueId = requestUrl.searchParams.get('league') || '';
         const force = requestUrl.searchParams.get('fresh') === '1';
         const result = await getAnalysis(eventId, leagueId, force);
-        return jsonResponse(res, 200, { ok: true, data: result.value, meta: { fetchedAt: result.fetchedAt, stale: result.stale, cache: result.cache } });
+        return jsonResponse(res, 200, { ok: true, data: result.value, meta: cacheMetadata(result) });
       }
       if (pathname === '/api/intelligence') {
         const eventId = requestUrl.searchParams.get('event') || '';
         const leagueId = requestUrl.searchParams.get('league') || '';
         const force = requestUrl.searchParams.get('fresh') === '1';
         const result = await getIntelligence(eventId, leagueId, force);
-        return jsonResponse(res, 200, { ok: true, data: result.value, meta: { fetchedAt: result.fetchedAt, stale: result.stale, cache: result.cache } });
+        return jsonResponse(res, 200, { ok: true, data: result.value, meta: cacheMetadata(result) });
       }
       if (pathname === '/api/team-dna') {
         const teamId = requestUrl.searchParams.get('team') || '';
@@ -2031,7 +2206,7 @@ const server = http.createServer(async (req, res) => {
         const teamName = requestUrl.searchParams.get('name') || '';
         const force = requestUrl.searchParams.get('fresh') === '1';
         const result = await getTeamDna(teamId, leagueId, teamName, force);
-        return jsonResponse(res, 200, { ok: true, data: result.value, meta: { fetchedAt: result.fetchedAt, stale: result.stale, cache: result.cache } });
+        return jsonResponse(res, 200, { ok: true, data: result.value, meta: cacheMetadata(result) });
       }
       return jsonResponse(res, 404, { ok: false, error: 'Endpoint non trovato' });
     } catch (error) {
@@ -2046,9 +2221,28 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-server.listen(PORT, HOST, () => {
-  console.log(`VANTAGGIO disponibile su http://${HOST}:${PORT}`);
-  console.log(`Dati gratuiti • timezone Europe/Rome • ${romeDate()}`);
-});
+function startServer() {
+  return server.listen(PORT, HOST, () => {
+    console.log(`VANTAGGIO disponibile su http://${HOST}:${PORT}`);
+    console.log(`Dati gratuiti • timezone Europe/Rome • ${romeDate()}`);
+  });
+}
 
-process.on('SIGTERM', () => server.close(() => process.exit(0)));
+if (require.main === module) {
+  startServer();
+  process.on('SIGTERM', () => server.close(() => process.exit(0)));
+}
+
+module.exports = {
+  startServer,
+  server,
+  fetchText,
+  cached,
+  cacheMetadata,
+  sourceHealthSnapshot,
+  statisticalModel,
+  weightedRecentProfile,
+  memoryCache,
+  sourceTelemetry,
+  sourceCircuits
+};

@@ -1,10 +1,10 @@
-# VANTAGGIO 4.8.1 — XI Intelligence + Pre-Match Vault
+# VANTAGGIO 4.9.0 — Trust & Responsive Foundations
 
-Portale calcistico responsive in italiano che unisce calendario globale, score essenziale, probabilità e **Pre-Match Total Intelligence** in un’identità ibrida esclusiva: regia broadcast, data room e magazine editoriale. Funziona senza API a pagamento, senza account utente e senza dipendenze npm.
+Portale calcistico responsive in italiano che unisce calendario globale, score essenziale, probabilità calibrabili e **Pre-Match Total Intelligence** in un’identità ibrida esclusiva: regia broadcast, data room e magazine editoriale. Funziona senza API a pagamento, senza account utente e senza dipendenze npm. Il sistema non promette infallibilità: applica un approccio **fail-closed**, espone l’incertezza e può scegliere `HOLD` invece di trasformare dati insufficienti in un consiglio.
 
 ## Esperienza V4 per ogni sezione
 
-- **Dashboard / Daily Briefing**: finestra prematch, agenda delle 48 ore, segnale Intelligence e copertura, senza ticker o anteprime duplicate.
+- **Dashboard / Daily Briefing**: finestra prematch, agenda delle 48 ore, Decision Gate e copertura, senza ticker o anteprime duplicate.
 - **Partite / Pre-Match Command**: ora ufficiale Europe/Rome, dossier da preparare, prossimo kickoff, densità del programma e calendario a giornate. Durante la gara score, minuto e stato restano attuali, mentre il dossier eventualmente osservato prima del kickoff rimane congelato e in sola lettura.
 - **Radar / Signal Studio**: podio delle priorità e tavolo completo di selezione, senza un secondo registro dei segnali ridondante.
 - **News / VANTAGGIO Newsroom**: apertura editoriale, titoli secondari, classificazione tematica, data ed editore visibili.
@@ -12,6 +12,24 @@ Portale calcistico responsive in italiano che unisce calendario globale, score e
 - **Preferiti / My Matchroom**: countdown, prossimo evento, dossier consultati, alert e privacy locale.
 - **Scout Search**: ricerca trasversale di partite, squadre, competizioni e notizie con navigazione da tastiera.
 - **Match dossier / Control Room**: un’unica architettura adattiva raggruppa Sintesi, Squadre, Numeri e Verifiche; il Power Model vive soltanto nell’area Numeri.
+
+## Trust & Responsive Foundations V4.9
+
+- **Decision Passport in primo piano**: la Sintesi di ogni partita mostra subito `READY`, `CAUTION` o `HOLD`, motivazione, qualità del modello, campione, presenza del benchmark e vuoti ancora aperti. In `HOLD` le probabilità restano consultabili, ma nessun segnale viene promosso.
+- **Power Model 3.0**: Poisson con decadimento temporale dichiarato a 120 giorni, peso moderato casa/trasferta, shrinkage verso un prior prudente e correzione Dixon–Coles limitata ai punteggi bassi quando entrambe le squadre raggiungono il campione minimo.
+- **H2H declassato correttamente**: i precedenti diretti restano contesto leggibile, ma non aumentano più il quality score del modello.
+- **Ensemble trasparente**: output solo modello, mercato senza margine e consenso sono separati. Quando il mercato 1-X-2 esiste, il peso è dinamico e visibile nel Model Passport; quando manca, il gate diventa più prudente.
+- **Model Passport**: versione, timestamp, campione effettivo, half-life, prior, correzione low-score e pesi modello/mercato accompagnano ogni fotografia quantitativa.
+- **Track Record più rigoroso**: ogni snapshot prematch conserva gate, versione, campione e componenti del forecast. Dopo il finale calcola Brier e log-loss; ECE/calibrazione viene dichiarata significativa soltanto da 30 finali osservati. Quando disponibile è possibile confrontare consenso, solo modello e mercato.
+- **Resilienza verificata**: ogni fonte usa un solo retry limitato; dopo quattro errori transitori consecutivi il circuit breaker interrompe le chiamate per un cooldown crescente. Il rientro richiede una risposta valida.
+- **Fallback stale limitato**: l’ultima risposta valida viene servita soltanto entro un’età massima, sempre con `staleAgeMs`, `staleLimitMs` e stato visibile. Un dato troppo vecchio fallisce invece di propagarsi in silenzio.
+- **State Continuity Guard**: il frontend impedisce regressioni spurie `finale → live/prematch` o `live → prematch`, conservando stato e score già osservati mentre accetta le transizioni in avanti.
+- **Desktop Analyst Workspace**: il dossier arriva a 1180 px sui monitor adeguati, con confronti più leggibili, Model Passport e gerarchia risposta → prove → dettaglio.
+- **Android Progressive Journey**: tab Control Room in griglia 2×2 senza dipendenza orizzontale, bottom navigation con safe area, controlli principali da almeno 44 px e tipografia senza dichiarazioni sotto 11 px.
+- **Rendering più leggero**: `content-visibility:auto` differisce sezioni lunghe fuori schermo senza introdurre dipendenze client.
+- **Test di fondazione**: una suite dedicata verifica normalizzazione, recency, shrinkage, low-score correction, retry, apertura/rientro del circuito e scadenza reale del fallback stale.
+
+Il razionale di ricerca, le fonti e la roadmap successiva sono documentati in [`RESEARCH_V4.9.md`](./RESEARCH_V4.9.md).
 
 ## Global Calendar Hardening V4.8.1
 
@@ -51,17 +69,17 @@ Portale calcistico responsive in italiano che unisce calendario globale, score e
 ## Match Control Room V4.5
 
 - **Quattro aree, nessun contenuto sparso**: Sintesi per la decisione, Squadre per tattica/calendario/lineup/availability, Numeri per Power Model e dati del torneo, Verifiche per fonti, What Changed, vuoti informativi e Reliability Ledger.
-- **Match Readiness Gate**: prima di qualsiasi segnale controlla formazioni, disponibilità, affidabilità complessiva, campione tecnico e freschezza. Può indicare Pronta, Cautela o Attendi senza trasformarsi in promessa di risultato.
+- **Match Readiness Gate**: prima di qualsiasi segnale controlla formazioni, disponibilità, affidabilità complessiva, campione tecnico, gate del Power Model e freschezza. Può indicare Pronta, Cautela o Attendi senza trasformarsi in promessa di risultato.
 - **Evidence Map**: separa e conta fatti verificati, letture derivate, punti da verificare e segnalazioni superate dalle lineup ufficiali.
 - **Dossier adattivo**: pre-partita mostra il brief decisionale completo; a gara iniziata il server non ricalcola l’analisi e il browser può mostrare soltanto la copia prematch già osservata, congelata dal Vault; dopo il finale chiude ogni consiglio e apre la review. Radar e Power Picks selezionano soltanto eventi realmente pre-kickoff.
-- **Progressive disclosure controllata**: un solo livello di tab principali e un secondo livello esclusivamente nell’area Verifiche. Su Android la navigazione rimane sticky e scorrevole.
+- **Progressive disclosure controllata**: un solo livello di tab principali e un secondo livello esclusivamente nell’area Verifiche. Su Android la navigazione rimane sticky in una griglia 2×2 leggibile, senza dipendenza da scroll orizzontale.
 - **Accessibilità**: tab con ruoli e stati ARIA, focus visibile, attivazione standard e navigazione con frecce, Home ed End.
 - La Sintesi pre-partita è stata ridotta da oltre 21.000 a circa 6.000 caratteri di markup nel test reale, senza eliminare i dettagli: sono stati ricollocati nell’area corretta.
 
 ## Transparency & Availability Intelligence V4.4
 
-- **Model Track Record**: salva localmente solo la prima lettura realmente vista prima del kickoff. Lo snapshot è immutabile, viene riconciliato con il finale anche nelle visite successive e mostra accuratezza 1-X-2, Brier normalizzato, fiducia media e gap di calibrazione. Non esiste backfill post-hoc.
-- **Source Health Center**: espone stato osservato, ultimo successo, errori, chiamate valide, latenza media, ruolo e copertura di ciascuna fonte senza mostrare credenziali o URL sensibili. Salute tecnica e completezza editoriale restano concetti distinti.
+- **Model Track Record**: salva localmente solo la prima lettura realmente vista prima del kickoff. Lo snapshot è immutabile, viene riconciliato con il finale anche nelle visite successive e mostra accuratezza 1-X-2, Brier, log-loss, copertura non-HOLD e calibrazione solo oltre il campione minimo. Non esiste backfill post-hoc.
+- **Source Health Center**: espone stato osservato, ultimo successo, errori, chiamate valide, latenza media, ruolo, copertura e stato del circuito di ciascuna fonte senza mostrare credenziali o URL sensibili. Salute tecnica e completezza editoriale restano concetti distinti.
 - **Availability Intelligence**: combina formazioni ufficiali dell'evento, injury feed espliciti, dataset ufficiale Fantasy Premier League per la sola Premier League e rassegna datata su infortuni, squalifiche, fitness e lineup.
 - **Gerarchia delle prove**: lineup e comunicati ufficiali → dataset ufficiali/provider espliciti → reporting forte → segnali da verificare. Sono visibili tier, timestamp, fonte, stato del giocatore e riscontri fra editori; un riscontro editoriale non diventa automaticamente conferma medica.
 - **Unknown by design**: feed vuoti, assenza di titoli e silenzio delle fonti non vengono mai tradotti in “rosa al completo”. Le formazioni ufficiali prevalgono su segnalazioni precedenti incompatibili.
@@ -71,7 +89,7 @@ Portale calcistico responsive in italiano che unisce calendario globale, score e
 
 ## Dossier Cleanup V4.3
 
-- **Analisi approfondita in primo piano su ogni partita**: il modal carica Match Intelligence prima del modello numerico e rende subito evidente il Deep Research Brief o la Deep Match Review.
+- **Analisi approfondita in primo piano su ogni partita**: il modal carica Match Intelligence e Power Model in parallelo; rende subito evidente il Decision Passport, seguito dal Deep Research Brief o dalla Deep Match Review.
 - **Copertura garantita ma trasparente**: se la richiesta Intelligence fallisce, compare un dossier ridotto con soli dati verificati di calendario, forma e modello eventualmente disponibile. La copertura parziale è dichiarata e non viene presentata come ricerca completa.
 - **Gerarchia più pulita**: sotto l'analisi principale restano tre sintesi di evidenza, red flags compatte e cinque cassetti opzionali per verificare tattica, calendario, numeri, news e affidabilità.
 - **Power Model separato**: probabilità e scenari quantitativi sono conservati in un cassetto tecnico chiuso, così non nascondono più la lettura editoriale.
@@ -109,13 +127,15 @@ Portale calcistico responsive in italiano che unisce calendario globale, score e
 
 Ogni partita futura apre due livelli distinti. Match Intelligence è sempre il primo; se la copertura completa non è raggiungibile, il frontend mantiene un dossier ridotto e chiaramente etichettato. Durante la gara questi livelli sono accessibili soltanto dalla fotografia prematch realmente salvata sul dispositivo e sono marcati come archivio congelato.
 
-### Power Model 2.1
+### Power Model 3.0
 
-- probabilità 1-X-2 e confronto con il solo modello statistico;
+- probabilità 1-X-2 con output solo modello, mercato senza margine e consenso mantenuti separati;
+- recency weighting a half-life dichiarata, contesto casa/trasferta e shrinkage sui campioni ridotti;
+- correzione Dixon–Coles prudente e limitata ai punteggi bassi quando il campione minimo è presente;
 - gol attesi, risultato modale, Over/Under e Goal/No Goal;
-- ultime cinque partite, rendimento casa/trasferta e precedenti;
-- classifica e consenso di mercato senza margine, quando disponibili;
-- segnali ordinati, qualità del campione e profilo di rischio.
+- ultime cinque partite e precedenti visibili, ma H2H escluso dal quality score;
+- Decision Passport `READY / CAUTION / HOLD`, Model Passport e Unknowns Budget;
+- gate e segnali ordinati per maturità, qualità del campione e profilo di rischio.
 
 ### Deep Analysis / Intelligence Room
 
@@ -142,13 +162,13 @@ La Intelligence Room viene caricata solo quando si apre una partita futura. La l
 - aggiornamento automatico ogni 90 secondi;
 - score, minuto e stato corrente degli incontri in corso, con eventuale dossier prematch congelato e senza ricalcolo live;
 - Match Radar con indice trasparente 0–100;
-- Power Picks ordinati per segnale, rischio e qualità;
+- Power Picks ordinati prima per gate, poi per segnale e qualità; gli elementi `HOLD` non mostrano una percentuale come proposta attiva;
 - notizie aggregate con link alla fonte originale;
 - classifiche di 16 competizioni: top five, Serie B, Championship, Portogallo, Paesi Bassi, Turchia, Belgio, Scozia, MLS, Brasile, Argentina e Messico;
 - ricerca globale (`Ctrl/Cmd + K`);
 - preferiti e alert locali persistenti nel browser;
-- cache server con fallback sull'ultima risposta valida;
-- interfaccia responsive dedicata ad Android Chrome; nessuna modalità offline o service worker.
+- cache server con fallback last-known-good a età massima dichiarata, retry limitato e circuit breaker per fonte;
+- interfaccia duale: Analyst Workspace desktop e percorso progressivo dedicato ad Android Chrome; nessuna modalità offline o service worker.
 
 ## Fonti gratuite
 
@@ -162,14 +182,16 @@ Le fonti possono essere parziali o cambiare formato. Il backend normalizza i dat
 ## Architettura e cache
 
 - Node.js 18+, zero dipendenze runtime;
-- `/api/analysis`: Power Model e contesto essenziale, cache 10 minuti;
+- `/api/analysis`: Power Model e contesto essenziale, cache 5 minuti;
 - `/api/intelligence`: calendario, tattica, copione, giocatori, Availability Desk, news e Reliability Ledger, cache separata 10 minuti;
 - `/api/team-dna`: profilo squadra, split, fingerprint tecnico e ledger, cache 30 minuti;
-- `/api/health`: telemetria sicura e senza segreti su stato, freschezza, errori, latenza e copertura delle fonti;
+- `/api/health`: telemetria sicura e senza segreti su stato, freschezza, errori, latenza, copertura, circuit breaker e fallback bounded delle fonti;
 - disponibilità FPL cache 30 minuti, injury feed 20 minuti, rassegna availability 15 minuti;
 - snapshot tecnici recenti: massimo tre eventi per squadra, cache 30 minuti;
+- cache last-known-good con età massima proporzionata al TTL; nessun fallback stale perpetuo;
+- un retry su errori transitori/timeout e circuito aperto dopo quattro errori consecutivi, con cooldown da 60 a 300 secondi;
 - endpoint leggeri per partite, classifiche, notizie e stato servizio;
-- asset statici con versionamento cache `4.8.1`; cambio data automatico a mezzanotte nel fuso Europe/Rome.
+- asset statici con versionamento cache `4.9.0`; cambio data automatico a mezzanotte nel fuso Europe/Rome.
 
 ## Pubblicazione con URL stabile
 
@@ -193,7 +215,7 @@ npm test
 npm run audit
 ```
 
-I test verificano homepage e asset V4.8.1, tutte le viste frontend, Match Control Room, Pre-Match Total Intelligence, XI probabile/ufficiale, punteggi separati, assenze documentate, Pre-Match Vault, congelamento e blocco post-hoc, Readiness Gate, Evidence Map, Signal Lifecycle, checkpoint T-60/T-30/T-10, delta e riconciliazione, navigazione ARIA, assenza di notifiche e ricalcoli live, fallback trasparente, Model Track Record, Source Health Center, Availability Intelligence, Deep Match Review, classifiche, Reliability Ledger e Team DNA. L’audit esteso conta dinamicamente tutti i controlli eseguiti.
+I test verificano homepage e asset V4.9.0, tutte le viste frontend, Decision/Model Passport, gate `READY / CAUTION / HOLD`, recency, shrinkage, low-score correction, Brier, log-loss, soglia di calibrazione, retry, apertura/rientro del circuit breaker, scadenza stale, tipografia minima, touch target, rendering differito, Match Control Room, Pre-Match Total Intelligence, XI probabile/ufficiale, punteggi separati, assenze documentate, Pre-Match Vault, congelamento e blocco post-hoc, Readiness Gate, Evidence Map, Signal Lifecycle, checkpoint T-60/T-30/T-10, delta e riconciliazione, navigazione ARIA, assenza di notifiche e ricalcoli live, fallback trasparente, Source Health Center, Availability Intelligence, Deep Match Review, classifiche, Reliability Ledger e Team DNA. L’audit esteso conta dinamicamente tutti i controlli eseguiti.
 
 ## Struttura
 
@@ -201,9 +223,11 @@ I test verificano homepage e asset V4.8.1, tutte le viste frontend, Match Contro
 - `public/index.html` — shell accessibile dell'app;
 - `public/styles.css` — design system responsive e Intelligence Room;
 - `public/app.js` — routing, filtri, ricerca, preferiti, modal e rendering Intelligence;
+- `scripts/foundation-test.js` — test puri di modello, retry, circuit breaker, recovery e stale bounded;
 - `scripts/smoke-test.js` — smoke test end-to-end delle funzioni principali;
-- `scripts/frontend-test.js` — rendering VM di viste, dossier e stati limite;
-- `scripts/audit-test.js` — matrice estesa di integrità API, dati e richieste non valide.
+- `scripts/frontend-test.js` — rendering VM di viste, dossier, responsive duale e stati limite;
+- `scripts/audit-test.js` — matrice estesa di integrità API, dati e richieste non valide;
+- `RESEARCH_V4.9.md` — ricerca, tesi di prodotto, tecniche, acceptance criteria e roadmap.
 
 ## Nota responsabile
 

@@ -1,13 +1,13 @@
 {
   "name": "vantaggio-calcio",
-  "version": "4.8.1",
+  "version": "4.9.0",
   "private": true,
-  "description": "Calendario globale, XI Intelligence e Pre-Match Vault senza API a pagamento.",
+  "description": "Decision Passport, Power Model 3.0, calendario globale e resilienza bounded senza API a pagamento.",
   "scripts": {
     "start": "node server.js",
     "dev": "node server.js",
-    "check": "node --check server.js && node --check public/app.js && node --check scripts/smoke-test.js && node --check scripts/audit-test.js && node --check scripts/frontend-test.js",
-    "test": "node scripts/smoke-test.js && node scripts/frontend-test.js",
+    "check": "node --check server.js && node --check public/app.js && node --check scripts/foundation-test.js && node --check scripts/smoke-test.js && node --check scripts/audit-test.js && node --check scripts/frontend-test.js",
+    "test": "node scripts/foundation-test.js && node scripts/smoke-test.js && node scripts/frontend-test.js",
     "audit": "node scripts/audit-test.js"
   },
   "engines": {
