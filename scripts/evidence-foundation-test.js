@@ -216,6 +216,8 @@ function testFoundationTwoMapping() {
   });
   assert.ok(foundation.resolvedFacts.length >= 8);
   assert.equal(foundation.conflicts.length, 0);
+  assert.equal(foundation.decisionTrace.applicable, true, 'Il gate decisionale deve restare applicabile prima del kickoff');
+  assert.equal(foundation.decisionTrace.phase, 'pre');
   assert.equal(foundation.decisionTrace.effectiveGate.state, 'ready');
   assert.ok(foundation.evidenceLedger.every(item => item.time.observedAt === T0));
 
@@ -229,8 +231,22 @@ function testFoundationTwoMapping() {
   const historicalAvailability = historical.evidenceLedger.find(item => item.factType === 'availability.coverage');
   assert.equal(historicalAvailability.state, 'rejected', 'Una fonte corrente non deve ricostruire retroattivamente l’availability di una vecchia gara');
   assert.equal(historicalAvailability.quality.coverage, 0);
+  assert.equal(historical.decisionTrace.applicable, false, 'Una review conclusa non deve esporre un gate decisionale applicabile');
+  assert.equal(historical.decisionTrace.phase, 'post');
+  assert.equal(historical.decisionTrace.modelGate.state, 'hold', 'Il precedente READY del modello deve essere chiuso dopo il risultato');
+  assert.equal(historical.decisionTrace.modelGate.label, 'CLOSED');
   assert.equal(historical.decisionTrace.effectiveGate.state, 'hold');
+  assert.ok(historical.decisionTrace.rule.includes('Dopo il kickoff'));
   assert.ok(historical.evidenceLedger.some(item => item.factType === 'event.result' && item.state === 'confirmed'));
+
+  const stalePrematchAnalysis = JSON.parse(JSON.stringify(analysis));
+  stalePrematchAnalysis.event.date = '2026-08-17T09:00:00.000Z';
+  stalePrematchAnalysis.event.state = 'pre';
+  stalePrematchAnalysis.event.completed = false;
+  const stalePrematch = buildCurrentEvidenceFoundation(stalePrematchAnalysis, availability, { ...reliability, minutesToKickoff: -60 }, T0);
+  assert.equal(stalePrematch.decisionTrace.applicable, false, 'Uno stato provider prematch dopo il kickoff non deve riaprire la decisione');
+  assert.equal(stalePrematch.decisionTrace.phase, 'closed');
+  assert.equal(stalePrematch.decisionTrace.modelGate.state, 'hold');
 
   const incompleteLineupAnalysis = JSON.parse(JSON.stringify(analysis));
   incompleteLineupAnalysis.lineups.teams = incompleteLineupAnalysis.lineups.teams.slice(0, 1);

@@ -26,13 +26,13 @@ function noInvalidNumbers(value) {
 (async () => {
   const home = await request('/', 'text');
   check(home.response.status === 200, 'Homepage HTTP 200');
-  check(home.body.includes('V5.0.0') && home.body.includes('app.js?v=5.0.0'), 'Homepage V5.0.0 e cache key corrette');
+  check(home.body.includes('V5.0.1') && home.body.includes('app.js?v=5.0.1'), 'Homepage V5.0.1 e cache key corrette');
   check(home.response.headers.get('x-content-type-options') === 'nosniff', 'Header nosniff presente');
   check(home.response.headers.get('referrer-policy') === 'strict-origin-when-cross-origin', 'Referrer policy sicura presente');
 
   const [manifest, favicon, app, css, status, evidenceManifest] = await Promise.all([
-    request('/manifest.webmanifest'), request('/favicon.svg', 'text'), request('/app.js?v=5.0.0', 'text'),
-    request('/styles.css?v=5.0.0', 'text'), request('/api/status'), request('/api/evidence-foundation')
+    request('/manifest.webmanifest'), request('/favicon.svg', 'text'), request('/app.js?v=5.0.1', 'text'),
+    request('/styles.css?v=5.0.1', 'text'), request('/api/status'), request('/api/evidence-foundation')
   ]);
   check(manifest.response.status === 200 && manifest.body?.start_url === '/#dashboard' && manifest.body?.display === 'standalone', 'Manifest PWA valido');
   check(evidenceManifest.response.status === 200 && evidenceManifest.body?.data?.schemaVersion === '1.0' && evidenceManifest.body?.data?.registryVersion === '1.0' && evidenceManifest.body?.data?.sourceManifest?.sources?.length >= 6, 'Manifest Evidence Foundation V1 valido');
@@ -40,6 +40,7 @@ function noInvalidNumbers(value) {
   check(app.response.status === 200 && app.body.includes('renderFallbackDeepAnalysis'), 'Bundle frontend completo');
   check(app.body.includes('MATCH CONTROL ROOM') && app.body.includes('MATCH READINESS GATE') && app.body.includes('EVIDENCE MAP'), 'Control Room, Readiness Gate ed Evidence Map presenti');
   check(app.body.includes('PRE-MATCH TOTAL INTELLIGENCE') && app.body.includes('prematchTotalIntelligence') && app.body.includes('data-prematch-jump'), 'Manifesto Pre-Match Total Intelligence presente');
+  check(app.body.includes('REVIEW PASSPORT') && app.body.includes('Nessuna previsione ricostruita') && app.body.includes("data.temporal?.state === 'post'"), 'Review Passport chiuso e branch post-partita presenti');
   check(app.body.includes('contextDateConflict') && app.body.includes('Metadato contraddittorio'), 'Contraddizioni fra fase e data dichiarate');
   check(app.body.includes('PRE-MATCH WINDOW') && app.body.includes('PROGRAMMA DI OGGI') && app.body.includes('scegli “Oggi”') && !app.body.includes('LIVE PULSE') && !app.body.includes('LIVE CONTROL'), 'Dashboard prematch e calendario giornaliero trasparente');
   check(!app.body.includes('function notifyLive') && !app.body.includes("addChange('live'") && app.body.includes('Analisi live disattivata'), 'Nessun segnale, notifica o analisi ricalcolata durante il live');
@@ -132,6 +133,8 @@ function noInvalidNumbers(value) {
   const review = await request('/api/intelligence?event=401873624&league=uefa.super_cup');
   check(review.response.status === 200 && review.body?.data?.deepDive?.mode === 'post', 'Deep Match Review post-partita valida');
   check(review.body?.data?.event?.home?.score === 2 && review.body?.data?.event?.away?.score === 1, 'Risultato storico non alterato');
+  const reviewDecision = review.body?.data?.evidenceFoundation?.decisionTrace;
+  check(reviewDecision?.applicable === false && reviewDecision?.phase === 'post' && reviewDecision?.modelGate?.state === 'hold' && reviewDecision?.effectiveGate?.state === 'hold', 'Gate decisionale backend chiuso nella review storica');
   check(!JSON.stringify(review.body).includes('statisticalProbabilities'), 'Nessuna probabilità live riciclata nella review');
   const officialXi = review.body?.data?.lineupIntelligence;
   check(officialXi?.status === 'ufficiale' && officialXi.teams?.every(team => team.mode === 'ufficiale' && team.confidence === 100 && team.selected?.length === 11), 'XI ufficiali distinti e completi');

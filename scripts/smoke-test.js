@@ -10,23 +10,28 @@ async function get(path, type = 'json') {
 
 (async () => {
   const html = await get('/', 'text');
-  if (!html.includes('VANTAGGIO') || !html.includes('V5.0.0') || !html.includes('/app.js?v=5.0.0') || !html.includes('/styles.css?v=5.0.0')) throw new Error('Homepage o asset V5.0.0 non validi');
-  const [appJs, styles] = await Promise.all([get('/app.js?v=5.0.0', 'text'), get('/styles.css?v=5.0.0', 'text')]);
+  if (!html.includes('VANTAGGIO') || !html.includes('V5.0.1') || !html.includes('/app.js?v=5.0.1') || !html.includes('/styles.css?v=5.0.1')) throw new Error('Homepage o asset V5.0.1 non validi');
+  const [appJs, styles] = await Promise.all([get('/app.js?v=5.0.1', 'text'), get('/styles.css?v=5.0.1', 'text')]);
   const v4Modules = ['DAILY BRIEFING', 'PRE-MATCH COMMAND', 'SIGNAL STUDIO', 'VANTAGGIO NEWSROOM', 'TABLE LAB', 'MY MATCHROOM', 'SCOUT SEARCH', 'WHAT CHANGED DESK', 'KICKOFF WATCH', 'TEAM DNA', 'RELIABILITY LEDGER', 'MATCH ARCHIVE', 'MODEL TRACK RECORD', 'SOURCE HEALTH CENTER', 'AVAILABILITY INTELLIGENCE'];
   const dossierFirst = ['MATCH CONTROL ROOM', 'PRE-MATCH TOTAL INTELLIGENCE', 'prematchTotalIntelligence', 'renderFallbackDeepAnalysis', 'readinessGate', 'EVIDENCE MAP', 'SIGNAL LIFECYCLE', 'captureSignalLifecycle', 'COPERTURA RIDOTTA', 'XI INTELLIGENCE', 'PRE-MATCH VAULT', 'capturePrematchVault'];
   const ledgerV2 = ['DATA RELIABILITY LEDGER', 'DATA READINESS', 'reliability-dimensions', 'PRIORITÀ PRIMA DEL KICKOFF', 'Prova mancante', 'gate evidenze'];
-  if (!v4Modules.every(module => appJs.includes(module)) || !dossierFirst.every(module => appJs.includes(module)) || !ledgerV2.every(module => appJs.includes(module)) || !styles.includes('V4.8 · XI Intelligence + Pre-Match Vault') || !styles.includes('V4.9.1 · Reliability Ledger') || !styles.includes('.reliability-row.status-critical') || !styles.includes('.prematch-total-intelligence') || !styles.includes('.xi-intelligence') || !styles.includes('.prematch-vault-banner') || !styles.includes('.deep-dive.fallback')) throw new Error('Moduli esperienza V5.0.0 incompleti');
+  if (!v4Modules.every(module => appJs.includes(module)) || !dossierFirst.every(module => appJs.includes(module)) || !ledgerV2.every(module => appJs.includes(module)) || !styles.includes('V4.8 · XI Intelligence + Pre-Match Vault') || !styles.includes('V4.9.1 · Reliability Ledger') || !styles.includes('.reliability-row.status-critical') || !styles.includes('.prematch-total-intelligence') || !styles.includes('.xi-intelligence') || !styles.includes('.prematch-vault-banner') || !styles.includes('.deep-dive.fallback')) throw new Error('Moduli esperienza V5.0.1 incompleti');
   if (appJs.includes('class="broadcast-strip"') || appJs.includes('function newsroomPreview') || appJs.includes('SIGNAL LEDGER') || styles.includes('.broadcast-strip') || styles.includes('.signal-ledger')) throw new Error('Componenti ridondanti ancora attivi');
   const modalSource = appJs.slice(appJs.indexOf('function openMatch'), appJs.indexOf('function renderFallbackDeepAnalysis'));
   const summarySource = appJs.slice(appJs.indexOf('function matchRoomSummary'), appJs.indexOf('function matchRoomTeams'));
   const intelligenceSource = appJs.slice(appJs.indexOf('function renderIntelligence'), appJs.indexOf('function openInfo'));
   if (!modalSource.includes('id="matchIntelligence"') || modalSource.includes('model-drawer') || !modalSource.includes('Promise.allSettled([loadIntelligence(match), loadAnalysis(match)])')) throw new Error('Control Room o caricamento dossier non validi');
-  const decisionIndex = summarySource.indexOf('summaryDecisionPassport(data)');
-  const readinessIndex = summarySource.indexOf('readinessGate(data)');
-  const briefIndex = summarySource.indexOf('executiveBriefMarkup(data)');
-  const totalIndex = summarySource.indexOf('prematchTotalIntelligence(data)');
-  const lifecycleIndex = summarySource.indexOf('signalLifecycleMarkup(data)');
+  const prematchReturnIndex = summarySource.lastIndexOf('return `<div');
+  const postBranch = summarySource.slice(0, prematchReturnIndex);
+  const prematchBranch = summarySource.slice(prematchReturnIndex);
+  const decisionIndex = prematchBranch.indexOf('summaryDecisionPassport(data)');
+  const readinessIndex = prematchBranch.indexOf('readinessGate(data)');
+  const briefIndex = prematchBranch.indexOf('executiveBriefMarkup(data)');
+  const totalIndex = prematchBranch.indexOf('prematchTotalIntelligence(data)');
+  const lifecycleIndex = prematchBranch.indexOf('signalLifecycleMarkup(data)');
+  const postPassportIndex = postBranch.indexOf('postReviewPassport(data)');
   if (decisionIndex < 0 || readinessIndex < decisionIndex || briefIndex < readinessIndex || totalIndex < briefIndex || lifecycleIndex < totalIndex || !['summary', 'teams', 'numbers', 'verify'].every(tab => intelligenceSource.includes(`id: '${tab}'`))) throw new Error('Gerarchia Match Control Room non valida');
+  if (postPassportIndex < 0 || !postBranch.includes("data.event?.state === 'post'") || !postBranch.includes("data.temporal?.state === 'post'") || postBranch.includes('summaryDecisionPassport(data)') || postBranch.includes('prematchTotalIntelligence(data)') || postBranch.includes('summaryWatchMarkup(data)')) throw new Error('La review conclusa riattiva moduli decisionali prematch');
   const liveVaultIndex = modalSource.indexOf("if (match.state === 'in' || preWindowClosed)");
   if (liveVaultIndex < 0 || liveVaultIndex > modalSource.indexOf('loadIntelligence(match)') || !modalSource.includes('archivedPrematchData(match)') || !modalSource.includes('renderPrematchVault(') || appJs.includes('function notifyLive') || appJs.includes("addChange('live'")) throw new Error('Politica Pre-Match Vault per le partite in corso non valida');
 
@@ -105,7 +110,7 @@ async function get(path, type = 'json') {
   const health = await get('/api/health');
   if (!Array.isArray(health.sources) || !health.sources.some(source => source.calls > 0 && source.lastSuccessAt) || !health.rule || health.resilience?.staleFallback !== 'bounded' || health.resilience?.circuitFailureThreshold !== 4) throw new Error('Source Health Center non valido');
 
-  console.log(`✓ Homepage V5.0.0 e asset cache serviti`);
+  console.log(`✓ Homepage V5.0.1 e asset cache serviti`);
   console.log(`✓ Dossier-first, fallback trasparente e componenti ridondanti rimossi`);
   console.log(`✓ ${matches.data.matches.length} partite in ${matches.data.coverage?.competitions || 0} competizioni`);
   console.log(`✓ Power Model 3.0 operativo su ${analyzable.home.name}–${analyzable.away.name}`);

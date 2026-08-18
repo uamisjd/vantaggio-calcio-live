@@ -39,15 +39,24 @@ function compare(local, summary, label) {
 
 (async () => {
   const status = await getJson(`${base}/api/status`);
-  const matchesPayload = await getJson(`${base}/api/matches?league=all&from=${status.today}&to=${status.today}`);
-  const candidates = matchesPayload.data.matches.filter(match => !match.league.id.startsWith('global.')).slice(0, 5);
+  const referenceDay = new Date(`${status.today}T12:00:00Z`);
+  const from = new Date(referenceDay.getTime() - 86400000).toISOString().slice(0, 10);
+  const to = new Date(referenceDay.getTime() + 86400000).toISOString().slice(0, 10);
+  const matchesPayload = await getJson(`${base}/api/matches?league=all&from=${from}&to=${to}`);
+  const candidates = matchesPayload.data.matches.filter(match => !match.league.id.startsWith('global.')).slice(0, 30);
   assert.ok(candidates.length, 'Nessuna partita corrente confrontabile con la fonte primaria');
   let currentChecks = 0;
+  let unavailableSummaries = 0;
   for (const match of candidates) {
-    const summary = await getJson(`https://site.api.espn.com/apis/site/v2/sports/soccer/${encodeURIComponent(match.league.id)}/summary?event=${encodeURIComponent(match.id)}`);
-    compare(match, summary, `${match.home.name}–${match.away.name}`);
+    const url = `https://site.api.espn.com/apis/site/v2/sports/soccer/${encodeURIComponent(match.league.id)}/summary?event=${encodeURIComponent(match.id)}`;
+    const response = await fetch(url, { headers: { accept: 'application/json', 'user-agent': 'VANTAGGIO verification' } });
+    if (response.status === 400) { unavailableSummaries += 1; continue; }
+    if (!response.ok) throw new Error(`${url}: HTTP ${response.status}`);
+    compare(match, await response.json(), `${match.home.name}–${match.away.name}`);
     currentChecks += 1;
+    if (currentChecks === 5) break;
   }
+  assert.equal(currentChecks, 5, `Solo ${currentChecks} partite correnti confrontabili direttamente; summary non pubblicati: ${unavailableSummaries}`);
 
   const historicalLocal = (await getJson(`${base}/api/intelligence?event=401873624&league=uefa.super_cup`)).data.event;
   const historicalSource = await getJson('https://site.api.espn.com/apis/site/v2/sports/soccer/uefa.super_cup/summary?event=401873624');
@@ -55,7 +64,7 @@ function compare(local, summary, label) {
   const sourceStarterCount = (historicalSource.rosters || []).reduce((sum, roster) => sum + (roster.roster || []).filter(player => player.starter).length, 0);
   assert.equal(sourceStarterCount, 22, 'La fonte storica non espone più 22 titolari ufficiali');
 
-  console.log(`✓ Coerenza fonte primaria: ${currentChecks} partite correnti confrontate su ID, kickoff, squadre, stato, score e venue`);
+  console.log(`✓ Coerenza fonte primaria: ${currentChecks} partite correnti confrontate su ID, kickoff, squadre, stato, score e venue (${unavailableSummaries} summary non pubblicati ignorati)`);
   console.log('✓ Coerenza storica: PSG–Aston Villa 2-1 e 22 titolari ufficiali confrontati direttamente con ESPN');
 })().catch(error => {
   console.error('Source consistency test fallito:', error.message);

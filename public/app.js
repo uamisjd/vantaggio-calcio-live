@@ -1655,6 +1655,34 @@ function prematchTotalIntelligence(data) {
   return `<section class="prematch-total-intelligence"><header><div><span class="section-code">PRE-MATCH TOTAL INTELLIGENCE</span><h4>Il quadro completo, senza nascondere i vuoti</h4><p>Sei domande fondamentali. Tocca una riga per aprire subito tutte le prove nella sezione corretta.</p></div><div><strong>${full}/6</strong><span>complete</span></div></header><div class="prematch-coverage-bar"><span class="full" style="--share:${full / 6 * 100}%"></span><span class="partial" style="--share:${partial / 6 * 100}%"></span><span class="missing" style="--share:${missing / 6 * 100}%"></span></div><div class="prematch-manifest">${items.map((item, index) => `<button data-prematch-jump="${item.tab}" data-room-event="${escapeHtml(data.event.id)}"><span class="manifest-index">${String(index + 1).padStart(2, '0')}</span><div><small>${escapeHtml(item.title)}</small><strong>${escapeHtml(item.headline)}</strong><p>${escapeHtml(item.detail)}</p></div><em class="${item.state.tone}"><i></i>${escapeHtml(item.state.label)}</em>${icon('chevron')}</button>`).join('')}</div><footer>${icon('shield')}<span>${full} aree complete, ${partial} parziali, ${missing} non documentate. “Non disponibile” resta un’informazione, non viene coperto da una stima.</span></footer></section>`;
 }
 
+function postReviewPassport(data) {
+  const eventId = String(data.event?.id || '');
+  const snapshot = state.modelSnapshots[eventId];
+  const capturedAt = snapshot?.capturedAt ? new Date(snapshot.capturedAt) : null;
+  const kickoff = snapshot?.kickoff ? new Date(snapshot.kickoff) : null;
+  const probabilities = snapshot?.probabilities;
+  const probabilityValues = probabilities ? ['home', 'draw', 'away'].map(key => Number(probabilities[key])) : [];
+  const validSnapshot = Boolean(
+    capturedAt && kickoff && !Number.isNaN(capturedAt.getTime()) && !Number.isNaN(kickoff.getTime()) && capturedAt < kickoff &&
+    probabilityValues.length === 3 && probabilityValues.every(value => Number.isFinite(value) && value >= 0 && value <= 100) &&
+    probabilityValues.reduce((sum, value) => sum + value, 0) >= 99 && probabilityValues.reduce((sum, value) => sum + value, 0) <= 101
+  );
+  const scoreValues = [data.event?.home?.score, data.event?.away?.score];
+  const score = scoreValues.every(value => value !== null && value !== undefined && value !== '' && Number.isFinite(Number(value)))
+    ? `${Number(scoreValues[0])}–${Number(scoreValues[1])}`
+    : 'Risultato n/d';
+  const evidenceState = data.evidenceFoundation?.decisionTrace?.effectiveGate?.label || 'CHIUSO';
+  const lineupState = data.lineups?.official ? 'Ufficiali' : 'Parziali';
+  if (!validSnapshot) {
+    return `<section class="summary-decision-passport closed"><header><span>REVIEW PASSPORT</span><b>CHIUSA</b></header><div class="summary-decision-main"><div><h3>Nessuna previsione ricostruita</h3><p>La partita è conclusa. VANTAGGIO mostra risultato, fatti e dati realmente pubblicati dopo la gara, ma non crea retroattivamente un consiglio, un segnale o una probabilità prematch.</p></div><strong>${escapeHtml(score)}<small>risultato finale</small></strong></div><div class="summary-decision-meta"><span><b>Finale</b> stato evento</span><span><b>${escapeHtml(lineupState)}</b> formazioni</span><span><b>${data.reliability?.overall ?? '–'}/100</b> copertura review</span><span><b>${escapeHtml(evidenceState)}</b> gate non applicabile</span><span><b>0</b> previsioni post-hoc</span></div><button data-prematch-jump="verify" data-room-event="${escapeHtml(eventId)}">Apri fatti, fonti e punti non documentati ${icon('chevron')}</button></section>`;
+  }
+  const predicted = ['home', 'draw', 'away'].sort((a, b) => Number(probabilities[b]) - Number(probabilities[a]))[0];
+  const predictedLabel = predicted === 'home' ? snapshot.home : predicted === 'away' ? snapshot.away : 'Pareggio';
+  const capturedLabel = `${displayNewsDate(capturedAt)} · ${fmtTime.format(capturedAt)}`;
+  const settled = snapshot.result;
+  return `<section class="summary-decision-passport closed observed"><header><span>REVIEW PASSPORT · PREMATCH OSSERVATO</span><b>CONGELATO</b></header><div class="summary-decision-main"><div><h3>Fotografia autentica prima del kickoff</h3><p>Questa lettura era stata salvata alle ${escapeHtml(fmtTime.format(capturedAt))} prima della partita. Può essere confrontata con il risultato, ma non viene modificata usando ciò che è accaduto dopo.</p></div><strong>${escapeHtml(score)}<small>risultato finale</small></strong></div><div class="post-snapshot-probabilities" aria-label="Probabilità prematch congelate"><span><b>${Number(probabilities.home)}%</b>${escapeHtml(snapshot.home || data.event.home.name)}</span><span><b>${Number(probabilities.draw)}%</b>Pareggio</span><span><b>${Number(probabilities.away)}%</b>${escapeHtml(snapshot.away || data.event.away.name)}</span></div><div class="summary-decision-meta"><span><b>${escapeHtml(predictedLabel || 'Non disponibile')}</b> esito più probabile allora</span><span><b>${escapeHtml(capturedLabel)}</b> osservata</span><span><b>${escapeHtml(snapshot.decision?.label || 'n/d')}</b> gate prematch</span><span><b>${settled && Number.isFinite(settled.brier) ? settled.brier.toFixed(3) : '–'}</b> Brier congelato</span><span><b>${settled ? (settled.hit ? 'Sì' : 'No') : 'In attesa'}</b> esito 1-X-2</span></div><button data-prematch-jump="verify" data-room-event="${escapeHtml(eventId)}">Apri prove e cronologia ${icon('chevron')}</button></section>`;
+}
+
 function summaryDecisionPassport(data) {
   const key = `${data.event.leagueId}:${data.event.id}`;
   const model = state.analyses[key];
@@ -1681,6 +1709,12 @@ function summaryDecisionPassport(data) {
 }
 
 function matchRoomSummary(data) {
+  if (data.event?.completed || data.event?.state === 'post' || data.temporal?.state === 'post') {
+    const observedLifecycle = state.signalLifecycle[String(data.event?.id || '')]?.snapshots?.length
+      ? signalLifecycleMarkup(data)
+      : '';
+    return `<div class="match-room-pane summary-pane">${postReviewPassport(data)}${readinessGate(data)}${executiveBriefMarkup(data)}${observedLifecycle}</div>`;
+  }
   return `<div class="match-room-pane summary-pane">${summaryDecisionPassport(data)}${readinessGate(data)}${executiveBriefMarkup(data)}${prematchTotalIntelligence(data)}${signalLifecycleMarkup(data)}${summaryWatchMarkup(data)}</div>`;
 }
 

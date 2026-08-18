@@ -1675,7 +1675,38 @@ function buildCurrentEvidenceFoundation(analysis, availability, reliability, gen
 
   const resolution = resolveAllEvidence(evidence, { referenceTime: generatedAt });
   const evidenceSummary = buildEvidenceSummary(evidence, generatedAt, resolution.conflicts, resolution.resolvedFacts);
-  const decisionTrace = combineDecisionTrace(analysis.decision, reliability?.readiness, resolution.resolvedFacts, resolution.conflicts, generatedAt);
+  const decisionApplicable = currentState === 'pre' && !analysis.event.completed && Number.isFinite(eventTimeMs) && eventTimeMs > observationTimeMs;
+  const decisionPhase = decisionApplicable ? 'pre' : currentState === 'post' || analysis.event.completed ? 'post' : currentState === 'in' ? 'in' : 'closed';
+  const closedDecision = {
+    state: 'hold', label: 'CLOSED',
+    reason: decisionPhase === 'post'
+      ? 'Partita conclusa: nessuna decisione o previsione viene ricostruita dopo il risultato.'
+      : decisionPhase === 'in'
+        ? 'Partita in corso: il modello prematch non viene ricalcolato durante il live.'
+        : 'Kickoff raggiunto o non verificabile: la finestra decisionale prematch è chiusa.'
+  };
+  const closedReadiness = {
+    state: 'hold', label: 'CLOSED',
+    summary: decisionPhase === 'post'
+      ? 'Il dossier è una review fattuale; il gate decisionale non è più applicabile.'
+      : decisionPhase === 'in'
+        ? 'Durante il live resta soltanto lo stato essenziale e l’eventuale fotografia prematch già osservata.'
+        : 'Senza una finestra prematch valida il modello non può essere promosso.'
+  };
+  const decisionTrace = {
+    ...combineDecisionTrace(
+      decisionApplicable ? analysis.decision : closedDecision,
+      decisionApplicable ? reliability?.readiness : closedReadiness,
+      resolution.resolvedFacts,
+      resolution.conflicts,
+      generatedAt
+    ),
+    applicable: decisionApplicable,
+    phase: decisionPhase,
+    rule: decisionApplicable
+      ? 'Il Decision Passport usa sempre lo stato più prudente fra Model Gate ed Evidence Gate.'
+      : 'Dopo il kickoff il gate è chiuso: sono ammesse soltanto osservazioni prematch già congelate e fatti della gara.'
+  };
   const playerRefs = [...players.values()];
   const candidateGroups = new Map();
   playerRefs.forEach(player => {

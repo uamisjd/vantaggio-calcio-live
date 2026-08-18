@@ -82,10 +82,13 @@ function createNode() {
   test.state.matchRoomTabs[String(reviewPayload.data.event.id)] = 'teams';
   const officialLineups = test.renderIntelligence(reviewPayload.data);
   delete test.state.matchRoomTabs[String(reviewPayload.data.event.id)];
+  test.state.modelSnapshots = {};
+  test.state.signalLifecycle = {};
+  const postDossier = test.renderIntelligence(reviewPayload.data);
   const renders = {
     dashboard: test.renderDashboard(), matches: test.renderMatchesView(), radar: test.renderRadarView(),
     news: test.renderNewsView(), standings: test.renderStandingsView(), favorites: test.renderFavoritesView(),
-    roomSummary, roomTeams, roomNumbers, roomVerify, officialLineups, postDossier: test.renderIntelligence(reviewPayload.data),
+    roomSummary, roomTeams, roomNumbers, roomVerify, officialLineups, postDossier,
     fallback: test.renderFallbackDeepAnalysis(pre, analysisPayload.data, 'Errore simulato'),
     power: test.renderPowerAnalysis(analysisPayload.data)
   };
@@ -126,6 +129,31 @@ function createNode() {
   if ((completeToday.match(/class="match-row/g) || []).length !== expectedToday || completeToday.includes('calendar-limit-note')) throw new Error('Il filtro Oggi non mostra il programma giornaliero completo');
   test.state.selectedDate = 'all';
   if (!renders.postDossier.includes('REVIEW') || !renders.postDossier.includes('Decisione chiusa') || !renders.fallback.includes('COPERTURA RIDOTTA')) throw new Error('Review adattiva o fallback trasparente non renderizzato');
+  const closedPassport = renders.postDossier.match(/<section class="summary-decision-passport closed">[\s\S]*?<\/section>/)?.[0] || '';
+  if (!closedPassport || !closedPassport.includes('Nessuna previsione ricostruita') || !closedPassport.includes('0</b> previsioni post-hoc')) throw new Error('Review Passport fattuale assente senza snapshot osservato');
+  if (closedPassport.includes('%') || closedPassport.includes('READY') || closedPassport.includes('CAUTION')) throw new Error('Review Passport espone probabilità o consiglio post-hoc senza snapshot');
+  if (renders.postDossier.includes('PRE-MATCH TOTAL INTELLIGENCE') || renders.postDossier.includes('DECISION WATCH') || renders.postDossier.includes('Apri probabilità e Model Passport')) throw new Error('La review conclusa espone ancora moduli decisionali prematch');
+  const reviewByStateOnly = test.renderIntelligence({ ...reviewPayload.data, event: { ...reviewPayload.data.event, state: 'post', completed: false } });
+  if (!reviewByStateOnly.includes('Nessuna previsione ricostruita') || reviewByStateOnly.includes('PRE-MATCH TOTAL INTELLIGENCE')) throw new Error('Lo stato post del provider non chiude autonomamente la review');
+  const reviewEventId = String(reviewPayload.data.event.id);
+  const reviewKickoff = new Date(reviewPayload.data.event.date);
+  test.state.modelSnapshots[reviewEventId] = {
+    eventId: reviewEventId, capturedAt: new Date(reviewKickoff.getTime() + 60000).toISOString(), kickoff: reviewKickoff.toISOString(),
+    home: reviewPayload.data.event.home.name, away: reviewPayload.data.event.away.name,
+    probabilities: { home: 47, draw: 29, away: 24 }, decision: { state: 'ready', label: 'READY' }
+  };
+  const invalidSnapshotReview = test.renderIntelligence(reviewPayload.data);
+  if (!invalidSnapshotReview.includes('Nessuna previsione ricostruita') || invalidSnapshotReview.includes('PREMATCH OSSERVATO') || invalidSnapshotReview.includes('47%')) throw new Error('Uno snapshot successivo al kickoff viene presentato come autentico');
+  test.state.modelSnapshots[reviewEventId] = {
+    eventId: reviewEventId, capturedAt: new Date(reviewKickoff.getTime() - 3600000).toISOString(), kickoff: reviewKickoff.toISOString(),
+    home: reviewPayload.data.event.home.name, away: reviewPayload.data.event.away.name,
+    probabilities: { home: 47, draw: 29, away: 24 }, decision: { state: 'caution', label: 'CAUTION' },
+    result: { brier: 0.211, hit: true }
+  };
+  const observedPostDossier = test.renderIntelligence(reviewPayload.data);
+  if (!observedPostDossier.includes('PREMATCH OSSERVATO') || !observedPostDossier.includes('47%') || !observedPostDossier.includes('29%') || !observedPostDossier.includes('24%')) throw new Error('Lo snapshot prematch autentico non viene conservato nella review');
+  if (!observedPostDossier.includes('non viene modificata usando ciò che è accaduto dopo') || observedPostDossier.includes('PRE-MATCH TOTAL INTELLIGENCE')) throw new Error('Lo snapshot osservato non è immutabile o riattiva moduli prematch correnti');
+  delete test.state.modelSnapshots[reviewEventId];
   const inProgressIntel = { ...intelligencePayload.data, event: { ...intelligencePayload.data.event, state: 'in', home: { ...intelligencePayload.data.event.home, score: 1 }, away: { ...intelligencePayload.data.event.away, score: 0 } } };
   const scoreOnly = test.renderIntelligence(inProgressIntel);
   const pausedModel = test.renderPowerAnalysis({ ...analysisPayload.data, event: inProgressIntel.event });
@@ -221,7 +249,7 @@ function createNode() {
   if (Object.keys(test.state.prematchVault).length !== 10) throw new Error('Fallback quota del Vault non riduce la conservazione a 10 partite');
 
   const css = fs.readFileSync('public/styles.css', 'utf8');
-  for (const marker of ['@media (max-width: 720px)', '@media (max-width: 420px)', '@media (pointer: coarse)', 'prefers-reduced-motion', 'content-visibility: auto', 'width: min(1180px', '.deep-dive.fallback', '.preseason-reading', '.operations-deck', '.availability-desk', '.match-history', '.match-control-room', '.match-room-tabs', '.readiness-gate', '.evidence-map', '.signal-lifecycle', '.lifecycle-card', '.prematch-total-intelligence', '.prematch-manifest', '.score-only-live', '.xi-intelligence', '.xi-team-grid', '.prematch-vault-banner', '.calendar-limit-note', '.summary-decision-passport', '.model-passport', '.deep-story p { margin: 0; color: var(--muted); font-size: 11px;']) {
+  for (const marker of ['@media (max-width: 720px)', '@media (max-width: 420px)', '@media (pointer: coarse)', 'prefers-reduced-motion', 'content-visibility: auto', 'width: min(1180px', '.deep-dive.fallback', '.preseason-reading', '.operations-deck', '.availability-desk', '.match-history', '.match-control-room', '.match-room-tabs', '.readiness-gate', '.evidence-map', '.signal-lifecycle', '.lifecycle-card', '.prematch-total-intelligence', '.prematch-manifest', '.score-only-live', '.xi-intelligence', '.xi-team-grid', '.prematch-vault-banner', '.calendar-limit-note', '.summary-decision-passport', '.summary-decision-passport.closed', '.post-snapshot-probabilities', '.model-passport', '.deep-story p { margin: 0; color: var(--muted); font-size: 11px;']) {
     if (!css.includes(marker)) throw new Error(`Regola CSS mancante: ${marker}`);
   }
   const fontSizes = [...css.matchAll(/font-size:\s*([0-9.]+)px/g)].map(match => Number(match[1]));

@@ -1,6 +1,13 @@
-# VANTAGGIO 5.0.0 — Evidence Mesh Foundation
+# VANTAGGIO 5.0.1 — Evidence Mesh Foundation
 
 Portale calcistico responsive in italiano che unisce calendario globale, score essenziale, probabilità calibrabili e **Pre-Match Total Intelligence** in un’identità ibrida esclusiva: regia broadcast, data room e magazine editoriale. Funziona senza API a pagamento, senza account utente e senza dipendenze npm. Il sistema non promette infallibilità: applica un approccio **fail-closed**, espone l’incertezza e può scegliere `HOLD` invece di trasformare dati insufficienti in un consiglio.
+
+## Correzione V5.0.1 — review post-partita fail-closed
+
+- Una gara conclusa usa un **Review Passport** fattuale e non mostra più Decision Passport, Decision Watch o Pre-Match Total Intelligence ricostruiti dopo il risultato.
+- Il backend marca il Decision Trace come non applicabile dal kickoff in poi e chiude a `HOLD/CLOSED` anche un eventuale stato provider prematch ormai scaduto.
+- Probabilità e cronologia prematch restano visibili dopo la gara soltanto quando provengono da uno snapshot locale realmente salvato prima del kickoff; lo snapshot è dichiarato congelato e non viene ricalcolato.
+- I test coprono esplicitamente review senza snapshot, snapshot osservato, stato post, kickoff scaduto, rendering desktop/mobile e navigazione verso le prove.
 
 ## Esperienza V4 per ogni sezione
 
@@ -219,7 +226,7 @@ Le fonti possono essere parziali o cambiare formato. Il backend normalizza i dat
 - cache last-known-good con età massima proporzionata al TTL; nessun fallback stale perpetuo;
 - un retry su errori transitori/timeout e circuito aperto dopo quattro errori consecutivi, con cooldown da 60 a 300 secondi;
 - endpoint leggeri per partite, classifiche, notizie e stato servizio;
-- asset statici con versionamento cache `5.0.0`; cambio data automatico a mezzanotte nel fuso Europe/Rome.
+- asset statici con versionamento cache `5.0.1`; cambio data automatico a mezzanotte nel fuso Europe/Rome.
 
 ## Pubblicazione con URL stabile
 
@@ -247,7 +254,7 @@ npm run test:sources
 
 Il progetto è Node.js + JavaScript/CSS statici senza bundler: `npm run build` è quindi una build di validazione riproducibile che controlla sintassi di tutti i moduli, import e asset, contratto Evidence, accessibilità statica, breakpoint, font minimi e contrasto. I test `resources` e `sources` richiedono rete e restano separati dalla build deterministica.
 
-I test verificano inoltre artefatti Foundation V1, stabilità delle identità, namespace provider, timestamp, autorizzazione fonte-fatto, precedenza, supersessione, expiry, isolamento dei soggetti, conflitti, mapping Foundation 2 e blocco delle ricostruzioni availability post-hoc. Continuano a verificare homepage e asset V5.0.0, tutte le viste frontend, Decision/Model Passport, Model Gate e Data Readiness `READY / CAUTION / HOLD`, contratto Reliability Ledger V2, separazione provenienza/copertura/freschezza, Critical Evidence Gate temporale, blocco della compensazione opzionale, recency, shrinkage, low-score correction, Brier, log-loss, soglia di calibrazione, retry, apertura/rientro del circuit breaker, scadenza stale, tipografia minima, touch target, rendering differito, Match Control Room, Pre-Match Total Intelligence, XI probabile/ufficiale, punteggi separati, assenze documentate, Pre-Match Vault, congelamento e blocco post-hoc, Readiness Gate, Evidence Map, Signal Lifecycle, checkpoint T-60/T-30/T-10, delta e riconciliazione, navigazione ARIA, assenza di notifiche e ricalcoli live, fallback trasparente, Source Health Center, Availability Intelligence, Deep Match Review, classifiche e Team DNA. L’audit esteso conta dinamicamente tutti i controlli eseguiti.
+I test verificano inoltre artefatti Foundation V1, stabilità delle identità, namespace provider, timestamp, autorizzazione fonte-fatto, precedenza, supersessione, expiry, isolamento dei soggetti, conflitti, mapping Foundation 2 e blocco delle ricostruzioni availability post-hoc. Continuano a verificare homepage e asset V5.0.1, tutte le viste frontend, Decision/Model Passport, Model Gate e Data Readiness `READY / CAUTION / HOLD`, contratto Reliability Ledger V2, separazione provenienza/copertura/freschezza, Critical Evidence Gate temporale, blocco della compensazione opzionale, recency, shrinkage, low-score correction, Brier, log-loss, soglia di calibrazione, retry, apertura/rientro del circuit breaker, scadenza stale, tipografia minima, touch target, rendering differito, Match Control Room, Pre-Match Total Intelligence, XI probabile/ufficiale, punteggi separati, assenze documentate, Pre-Match Vault, congelamento e blocco post-hoc, Readiness Gate, Evidence Map, Signal Lifecycle, checkpoint T-60/T-30/T-10, delta e riconciliazione, navigazione ARIA, assenza di notifiche e ricalcoli live, fallback trasparente, Source Health Center, Availability Intelligence, Deep Match Review, classifiche e Team DNA. L’audit esteso conta dinamicamente tutti i controlli eseguiti.
 
 ## Struttura
 
