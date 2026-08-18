@@ -1,8 +1,8 @@
 # VANTAGGIO — Revisione integrale del progetto
 
 Aggiornato: 2026-08-18 (Europe/Rome)
-Stato: review integrale in corso; incremento correttivo `R-001` implementato e validato localmente come V5.0.1, non ancora distribuito.
-Release pubblica di partenza: V5.0.0, commit `52ff7809249adbc739f739e1106bf63fc856280d`. URL pubblico invariato.
+Stato: review integrale in corso; incremento correttivo `R-001` chiuso e distribuito come V5.0.1.
+Release pubblica di partenza: V5.0.0, commit `52ff7809249adbc739f739e1106bf63fc856280d`. Release corrente: V5.0.1, commit funzionale `44f2beefbf48d59bb335f5d9179ae4f473666c9e`. URL pubblico invariato.
 
 ## Scopo
 
@@ -105,7 +105,7 @@ Questi sono rilievi dimostrati, non ancora soluzioni implementate.
 
 ### BLOCKER
 
-- `R-001 · contaminazione post-partita` — **RISOLTO LOCALMENTE IN V5.0.1, DEPLOY PENDENTE**: la causa era l’invocazione incondizionata dei moduli prematch nella Sintesi e il passaggio del precedente `analysis.decision` al Decision Trace anche fuori fase. La correzione introduce un Review Passport fattuale, chiude backend e frontend dal kickoff, rimuove i moduli decisionali dalle review non osservate e ammette probabilità/cronologia soltanto da snapshot locali validamente catturati prima del kickoff. Prove e gate sono nel registro incrementi.
+- `R-001 · contaminazione post-partita` — **RISOLTO E DISTRIBUITO IN V5.0.1**: la causa era l’invocazione incondizionata dei moduli prematch nella Sintesi e il passaggio del precedente `analysis.decision` al Decision Trace anche fuori fase. La correzione introduce un Review Passport fattuale, chiude backend e frontend dal kickoff, rimuove i moduli decisionali dalle review non osservate e ammette probabilità/cronologia soltanto da snapshot locali validamente catturati prima del kickoff. Prove e gate sono nel registro incrementi.
 
 ### HIGH
 
@@ -148,7 +148,7 @@ Questi sono rilievi dimostrati, non ancora soluzioni implementate.
 
 ### R-001 — Review post-partita fail-closed · V5.0.1
 
-Stato: implementato e validato localmente; commit, push, deploy e gate produzione ancora pendenti.
+Stato: chiuso. Commit funzionale `44f2beefbf48d59bb335f5d9179ae4f473666c9e`, push e deploy Render completati all’URL pubblico invariato.
 
 Modifiche coerenti:
 
@@ -169,11 +169,21 @@ Gate locali conclusivi sulla build V5.0.1:
 - Chromium reale: desktop chiaro 1440×1000 e Android emulato scuro 360×800; review senza snapshot, CTA Verifiche, rifiuto dello snapshot catturato dopo il kickoff, snapshot prematch congelato, tre probabilità osservate, target 44 px, nessun overflow, nessun errore console/page/request.
 - Contrasto del nuovo stato chiuso: 6,03:1 nel tema chiaro e 5,37:1 nello scuro; screenshot desktop/mobile esaminati e rimossi dopo la verifica.
 
+Gate produzione:
+
+- Homepage e cache key V5.0.1 attive all’URL invariato.
+- Audit produzione `211/211`.
+- Risorse produzione `394/394`, zero rotte o non verificabili.
+- Coerenza fonte produzione: cinque partite correnti più fixture storica e 22 titolari.
+- API storica: `applicable=false`, `phase=post`, Model Gate `CLOSED`, Effective Gate `HOLD`.
+- Chromium produzione desktop 1440 e Android emulato 360: review chiusa, snapshot post-kickoff rifiutato, snapshot prematch congelato, CTA Verifiche, target 44 px, nessun overflow o errore browser.
+- Concorrenza produzione: `120/120`; p50 170 ms, p95 246 ms, massimo 535 ms a servizio già sveglio.
+
 Evento di gate gestito: il primo confronto fonti ha incontrato un `HTTP 400` ufficiale sul summary ESPN dell’evento ASEAN `401906724`, pur presente nello scoreboard. Il test non ignora il requisito: cerca fino a 30 candidati su tre giorni, salta soltanto summary ESPN esplicitamente non pubblicati con 400 e richiede comunque esattamente cinque confronti completi.
 
-Limiti: nessun Android fisico e nessuno screen reader hardware disponibile. Nessun codice V5.0.1 è ancora in produzione.
+Limiti: nessun Android fisico e nessuno screen reader hardware disponibile. Il cold start successivo a sospensione Render Free non è stato incluso nella misura di concorrenza.
 
 ## Stato corrente
 
-In corso: primo incremento di sicurezza `R-001`, localmente verde e pronto al gate di distribuzione.
-Prossimo passo immediato: rieseguire i gate essenziali con cache key V5.0.1, revisionare il diff, committare e distribuire all’URL invariato; poi verificare produzione. Solo dopo la chiusura produzione di `R-001` iniziare `R-002` (suite autonoma).
+Completato: primo incremento di sicurezza `R-001`, verde localmente e in produzione.
+Prossimo incremento: `R-002`, rendere la suite autonoma senza richiedere un server avviato manualmente. Prima si definiscono lifecycle, porta, teardown, override `BASE_URL` e comportamento in CI; poi si implementa il più piccolo runner condiviso e si prova esplicitamente `npm test` a server fermo.
